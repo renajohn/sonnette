@@ -1,0 +1,12 @@
+[project]
+name = "doorbell"
+version = "0.3.1"
+requires-python = ">=3.13"
+dependencies = ["paho-mqtt==2.1.0", "PyYAML>=6"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

@@ -1,0 +1,65 @@
+# Pile Portainer du service doorbell-ai, deployable telle quelle depuis ce
+# depot Git : Portainer > Stacks > Add stack > Repository, chemin du compose
+# « docker-compose.yml », et ces variables d'environnement dans la pile :
+#   SERVICE_HOME     dossier du service sur l'hote ; $SERVICE_HOME/data porte
+#                    config.yaml (modele : service/config.example.yaml), le
+#                    registre SQLite et les journaux JSONL
+#   PHOTOS_HOST_DIR  dossier des photos sur l'hote, a placer SOUS le dossier
+#                    media de Home Assistant, dans un sous-dossier a lui :
+#                    jamais partage avec un autre programme qui y ecrirait,
+#                    deux ecrivains calculeraient le meme nom de fichier
+#   PHOTOS_HOST      nom d'hote du serveur de photos (route Traefik)
+#   TZ               fuseau horaire (Europe/Zurich par defaut)
+# Portainer construit l'image depuis service/ (Dockerfile) : aucune image a
+# publier. Redeployer = « Pull and redeploy » dans Portainer, ou
+# deploy/deploy-service.sh, qui verifie d'abord qu'aucune photo n'est en
+# train d'arriver.
+networks:
+  web:
+    external: true
+
+services:
+  doorbell-ai:
+    build: ./service
+    # La version DOIT etre celle de service/pyproject.toml : deploy-service.sh
+    # refuse sinon. Changer les deux ensemble.
+    image: doorbell-ai:0.3.1
+    container_name: doorbell-ai
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Europe/Zurich}
+    volumes:
+      - ${SERVICE_HOME:?dossier du service sur l hote}/data:/data
+      - ${PHOTOS_HOST_DIR:?dossier des photos sur l hote}:/photos
+    logging:
+      options: { max-size: "10m", max-file: "3" }
+    # Sur le reseau « web », route par Traefik comme tout service HTTP de
+    # l'hote. Aucun port publie : on y accede par Traefik seulement.
+    networks:
+      - web
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+      traefik.enable: "true"
+      traefik.http.routers.sonnette.rule: "Host(`${PHOTOS_HOST:?nom d hote du serveur de photos}`)"
+      traefik.http.routers.sonnette.entrypoints: "websecure"
+      traefik.http.routers.sonnette.tls: "true"
+      # Le port est aussi dans le Dockerfile (EXPOSE) et dans serve_port de
+      # config.yaml : changer les trois ensemble.
+      traefik.http.services.sonnette.loadbalancer.server.port: "8099"
+      homepage.name: "Sonnette"
+      homepage.description: "Photos de la sonnette d'entrée, classées à l'arrivée"
+      homepage.group: "Apps"
+      homepage.href: "https://${PHOTOS_HOST}"
+      homepage.icon: "mdi-doorbell-video"
+      # SECURITY: this server has no authentication, same as Home Assistant's
+      # own /local. What makes that acceptable is that PHOTOS_HOST resolves
+      # to a PRIVATE address, unreachable from the Internet. Re-check that
+      # fact before widening anything: if this address ever became routable
+      # from the Internet, the whole history of faces at the door would
+      # become public.
+      # Also note (reviewed): directory listing is disabled (webserve.py's
+      # list_directory returns 404), on purpose and not merely as a detail
+      # of this same exposure -- being able to fetch one named photo and
+      # being able to browse the whole visit history at a glance are
+      # different amounts of harm, and the dashboard never needed the
+      # latter (every event carries the exact relative path of its photo).

@@ -1,0 +1,377 @@
+# Sonnette — tout ce que Home Assistant fait pour le service doorbell-ai.
+#
+# Source de verite : ce fichier, dans le depot sonnette-ring (ha/packages/).
+# Deploye par deploy/deploy-ha.sh vers /config/packages/sonnette.yaml. Ne pas
+# l'editer sur l'hote : le prochain deploiement l'ecraserait.
+#
+# Partage des roles. Le SERVICE (conteneur doorbell-ai) pilote les captures,
+# ecrit et classe les photos, tient la machine a etats, calcule le resume du
+# jour et archive les photos gardees. HOME ASSISTANT ne fait que ce que lui
+# seul peut faire : parler au telephone, et afficher. Aucun script shell,
+# aucun fichier ecrit par HA, aucune copie sous /config/www.
+#
+# Regles acquises, a ne pas redecouvrir :
+# - Declencheurs MQTT et non declencheurs d'etat sur event.porch : le topic
+#   doorbell/porch/event/state n'est PAS retenu, donc ni redemarrage de HA ni
+#   retour de disponibilite du service ne peuvent rejouer une vieille
+#   sonnerie. Un declencheur d'etat, lui, se declenche au passage
+#   unavailable -> etat restaure.
+# - Garde de fraicheur sur le champ t de la charge : ceinture et bretelles
+#   contre un message qui aurait attendu dans le broker.
+# - /media/local/... fonctionne dans une NOTIFICATION (l'application est
+#   authentifiee) et renvoie 401 dans une CARTE. Les photos du service sont
+#   sous /media/doorbell-ai, d'ou /media/local/doorbell-ai/<photo>.
+# - clickAction (Android) ET url (iOS) : on ne parie pas sur la cle honoree.
+# - tag : un avis remplace le precedent au lieu de s'empiler.
+# - Le chemin de la photo voyage dans l'action de la notification, jamais
+#   dans un helper partage : deux avis en attente gardent chacun LEUR photo.
+# - Seuils et delais dans des input_number, lus a l'execution (delay:/timeout:
+#   ou condition), jamais dans le for: d'un declencheur, rendu au chargement.
+# - Essai de bout en bout sans visiteur : publier sur doorbell/porch/event/state
+#   une charge portant "test": true -- le titre de l'avis porte alors (essai).
+
+input_number:
+  sonnette_colis_delai:
+    name: "Sonnette - attente d'une sonnerie apres un colis"
+    icon: mdi:package-variant-closed
+    min: 10
+    max: 300
+    step: 5
+    unit_of_measurement: s
+    mode: box
+  sonnette_silence_max:
+    name: "Sonnette - silence tolere avant alerte"
+    icon: mdi:heart-pulse
+    min: 15
+    max: 240
+    step: 5
+    unit_of_measurement: min
+    mode: box
+
+input_datetime:
+  sonnette_jour:
+    name: "Sonnette - jour affiché"
+    icon: mdi:calendar-search
+    has_date: true
+    has_time: false
+
+script:
+  sonnette_jour_decaler:
+    alias: "Sonnette - changer de jour"
+    description: >-
+      Avance ou recule le jour affiche de `jours` (-1, +1) sans jamais depasser
+      aujourd'hui. `jours: 0` revient a aujourd'hui.
+    mode: queued
+    fields:
+      jours:
+        description: "-1, +1, ou 0 pour aujourd'hui"
+        example: -1
+    sequence:
+      - variables:
+          delta: "{{ jours | default(0) | int(0) }}"
+          courant: "{{ states('input_datetime.sonnette_jour') }}"
+          cible: >-
+            {% if delta == 0 or courant in ['unknown', 'unavailable', ''] %}{{ now().date() }}
+            {% else %}{{ [ (as_datetime(courant ~ 'T00:00:00') + timedelta(days=delta)).date(), now().date() ] | min }}{% endif %}
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.sonnette_jour
+        data:
+          date: "{{ cible }}"
+
+  sonnette_garder:
+    alias: "Sonnette - garder une photo"
+    description: >-
+      Demande au service de mettre une photo hors d'atteinte de la purge des
+      180 jours (copie sous archive/, l'original ne bouge pas). quoi designe
+      un champ du resume : last_ding, last_packet ou last_visit.
+    mode: parallel
+    fields:
+      quoi:
+        description: "last_ding, last_packet ou last_visit"
+        example: last_ding
+    sequence:
+      - variables:
+          item: "{{ state_attr('sensor.porch_summary', quoi) }}"
+          photo: >-
+            {% if item is mapping %}{{ item.photo if item.photo is defined and item.photo
+               else (item.photos | default([], true) | first | default('', true)) }}{% endif %}
+      - if:
+          - condition: template
+            value_template: "{{ photo | length > 0 }}"
+        then:
+          - action: mqtt.publish
+            data:
+              topic: doorbell/porch/archive/set
+              payload: "{{ photo }}"
+
+automation:
+  - id: sonnette_jour_demander
+    alias: "Sonnette - demander le résumé du jour affiché"
+    description: >-
+      Transmet au service la date choisie ; il repond sur doorbell/porch/day
+      (sensor.porch_day). Aussi quand le service revient en ligne, pour qu'il
+      reprenne la date affichee apres un redemarrage.
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: input_datetime.sonnette_jour
+      - trigger: mqtt
+        topic: doorbell/porch/status
+        payload: online
+      - trigger: homeassistant
+        event: start
+    actions:
+      - variables:
+          jour: "{{ states('input_datetime.sonnette_jour') }}"
+      - condition: template
+        value_template: "{{ jour is match('^\\d{4}-\\d{2}-\\d{2}$') }}"
+      - action: mqtt.publish
+        data:
+          topic: doorbell/porch/day/set
+          payload: "{{ jour }}"
+
+  - id: sonnette_jour_minuit
+    alias: "Sonnette - revenir à aujourd'hui à minuit"
+    description: >-
+      Le tableau de bord n'a qu'un ecran et on y change de jour : sans ce
+      retour, une date laissee la veille au soir montrerait le mauvais jour au
+      reveil.
+    mode: single
+    triggers:
+      - trigger: time
+        at: "00:00:05"
+      - trigger: homeassistant
+        event: start
+    actions:
+      - action: script.sonnette_jour_decaler
+        data:
+          jours: 0
+
+  - id: sonnette_notifier_sonnerie
+    alias: "Sonnette - quelqu'un sonne"
+    description: >-
+      Avis sur sonnerie, avec la photo de l'instant. Le service publie
+      l'evenement ding des que la photo de sonnerie est ECRITE, avant tout
+      classement : l'avis ne depend pas du modele.
+    mode: parallel
+    max: 10
+    triggers:
+      - trigger: mqtt
+        topic: doorbell/porch/event/state
+        value_template: "{{ value_json.event_type }}"
+        payload: ding
+    conditions:
+      - condition: template
+        value_template: "{{ now().timestamp() - (trigger.payload_json.t | float(0)) < 120 }}"
+    actions:
+      - variables:
+          photo: "{{ trigger.payload_json.photo | default('', true) }}"
+          heure: "{{ trigger.payload_json.t | float(0) | timestamp_custom('%H:%M:%S', true) }}"
+          titre: "Quelqu'un sonne{{ ' (essai)' if trigger.payload_json.test | default(false) else '' }}"
+          vue: "/sonnette-cam/porte"
+      - action: __NOTIFY_PHONE__
+        data:
+          title: "{{ titre }}"
+          message: "{{ heure }}"
+          data:
+            tag: sonnette
+            image: "/media/local/doorbell-ai/{{ photo }}"
+            clickAction: "{{ vue }}"
+            url: "{{ vue }}"
+            actions:
+              - action: SONNETTE_GARDER
+                title: "Garder"
+                photo: "{{ photo }}"
+      - action: __NOTIFY_LAPTOP__
+        data:
+          title: "{{ titre }}"
+          message: "{{ heure }}"
+          data:
+            tag: sonnette
+            image: "/media/local/doorbell-ai/{{ photo }}"
+            clickAction: "{{ vue }}"
+            url: "{{ vue }}"
+            actions:
+              - action: SONNETTE_GARDER
+                title: "Garder"
+                photo: "{{ photo }}"
+
+  - id: sonnette_notifier_colis
+    alias: "Sonnette - colis sans sonnerie"
+    description: >-
+      Quelqu'un a ete vu avec un carton et n'a pas sonne. Muet si la sonnette
+      a deja retenti dans cette visite (champ dings de l'evenement), ou si
+      elle retentit pendant l'attente reglable : l'avis de sonnerie a alors
+      deja fait le travail. Le signal veut dire « quelqu'un PORTE un carton »,
+      pas « un colis a ete depose » : un colis pose est dans l'angle mort.
+    mode: parallel
+    max: 10
+    triggers:
+      - trigger: mqtt
+        topic: doorbell/porch/event/state
+        value_template: "{{ value_json.event_type }}"
+        payload: packet_seen
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ now().timestamp() - (trigger.payload_json.t | float(0)) < 120
+             and trigger.payload_json.dings | default(0) | int(0) == 0 }}
+    actions:
+      - variables:
+          photo: "{{ trigger.payload_json.photo | default('', true) }}"
+          heure: "{{ trigger.payload_json.t | float(0) | timestamp_custom('%H:%M', true) }}"
+          titre: "Colis sans sonnerie{{ ' (essai)' if trigger.payload_json.test | default(false) else '' }}"
+          vue: "/sonnette-cam/porte"
+      - wait_for_trigger:
+          - trigger: mqtt
+            topic: doorbell/porch/event/state
+            value_template: "{{ value_json.event_type }}"
+            payload: ding
+        timeout:
+          seconds: "{{ states('input_number.sonnette_colis_delai') | float(60) | int }}"
+        continue_on_timeout: true
+      - condition: template
+        value_template: "{{ wait.trigger is none }}"
+      - action: __NOTIFY_PHONE__
+        data:
+          title: "{{ titre }}"
+          message: "Quelqu'un est passé avec un colis à {{ heure }} sans sonner"
+          data:
+            tag: sonnette_colis
+            image: "/media/local/doorbell-ai/{{ photo }}"
+            clickAction: "{{ vue }}"
+            url: "{{ vue }}"
+            actions:
+              - action: SONNETTE_GARDER
+                title: "Garder"
+                photo: "{{ photo }}"
+      - action: __NOTIFY_LAPTOP__
+        data:
+          title: "{{ titre }}"
+          message: "Quelqu'un est passé avec un colis à {{ heure }} sans sonner"
+          data:
+            tag: sonnette_colis
+            image: "/media/local/doorbell-ai/{{ photo }}"
+            clickAction: "{{ vue }}"
+            url: "{{ vue }}"
+            actions:
+              - action: SONNETTE_GARDER
+                title: "Garder"
+                photo: "{{ photo }}"
+
+  - id: sonnette_garder_photo
+    alias: "Sonnette - garder la photo d'une notification"
+    description: >-
+      Bouton « Garder » d'un avis. Ne touche aucun fichier : transmet le chemin
+      au service, seul a ecrire dans l'archive. La reponse arrive par
+      sonnette_garder_resultat.
+    mode: parallel
+    triggers:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: SONNETTE_GARDER
+    actions:
+      - action: mqtt.publish
+        data:
+          topic: doorbell/porch/archive/set
+          payload: "{{ trigger.event.data.photo | default('', true) }}"
+
+  - id: sonnette_garder_resultat
+    alias: "Sonnette - confirmation de photo gardee"
+    mode: queued
+    triggers:
+      - trigger: mqtt
+        topic: doorbell/porch/archive/result
+    actions:
+      - action: __NOTIFY_PHONE__
+        data:
+          message: >-
+            {% set r = trigger.payload_json %}
+            {% if r.ok and r.reason == 'already' %}Photo déjà gardée
+            {% elif r.ok %}Photo gardée
+            {% elif r.reason == 'missing' %}Échec : photo introuvable (déjà purgée ?)
+            {% else %}Échec : impossible de garder cette photo ({{ r.reason }}){% endif %}
+          data:
+            tag: sonnette_archive
+
+  - id: sonnette_supervision_ring
+    alias: "Sonnette - alerte si la chaîne Ring est muette"
+    description: >-
+      Surveille binary_sensor.porch_ring_link, que le SERVICE calcule a partir
+      de chaque battement de ring-mqtt (camera/.../info/state, toutes les
+      5,0 min) : il passe a off apres 16 min sans battement.
+      CORRIGE LE 2026-09-17, ET LA RAISON COMPTE. Les versions precedentes
+      lisaient last_reported de sensor.porte_d_entree_info et ont crie au loup
+      (16 et 17 septembre) alors que pas un battement ne manquait : une entite
+      MQTT de HA n'ecrit son etat que si une valeur a CHANGE, et l'etat de ce
+      capteur est le champ lastUpdate de Ring, identique jusqu'a 180 min
+      d'affilee (mesure : 30 ecritures en 24 h pour ~294 battements).
+      last_reported etait donc fige pendant que ring-mqtt battait a l'heure.
+      Surveiller ce qu'une entite AFFICHE n'est pas surveiller les messages
+      qui l'alimentent. Ne JAMAIS revenir a last_reported / last_updated d'une
+      entite MQTT comme signe de vie.
+      Pas les instantanes non plus (app-snaps.ring.com tombe sans que
+      ring-mqtt soit en cause), ni un capteur de disponibilite (ring-mqtt n'a
+      pas de Last Will). Si c'est le service lui-meme qui tombe, le capteur
+      devient indisponible, pas off : c'est l'autre supervision qui parle.
+      Une alerte par 24 h au plus, memoire = last_triggered lu via this.
+      ANGLE MORT ASSUME : aucun rappel tant que la panne dure.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: time_pattern
+        minutes: "/5"
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ is_state('binary_sensor.porch_ring_link', 'off')
+             and (now() - states.binary_sensor.porch_ring_link.last_changed).total_seconds()
+                 > ((states('input_number.sonnette_silence_max') | float(30)) - 16) * 60
+             and (this.attributes.last_triggered is none
+                  or (now() - this.attributes.last_triggered).total_seconds() > 86400) }}
+    actions:
+      - action: __NOTIFY_PHONE__
+        data:
+          title: "Sonnette muette"
+          message: >-
+            ring-mqtt n'a plus donné signe de vie depuis
+            {{ (((now() - states.binary_sensor.porch_ring_link.last_changed).total_seconds() | int) // 60) + 16 }} min.
+            Il est probablement arrêté.
+          data:
+            tag: sonnette_panne
+
+  - id: sonnette_supervision_service
+    alias: "Sonnette - alerte si le service ne classe plus"
+    description: >-
+      binary_sensor.porch_model est alimente par le battement du service, qui
+      n'est emis que si une sonde d'inference REUSSIT : il atteste une chaine
+      capable de classer, pas un processus vivant. Il expire apres 3 battements
+      manques et devient indisponible si le conteneur tombe (LWT). Meme regle
+      que la chaine Ring : seuil reglable, une alerte par 24 h, tag distinct.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: time_pattern
+        minutes: "/5"
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ states.binary_sensor.porch_model is not none
+             and not is_state('binary_sensor.porch_model', 'on')
+             and (now() - states.binary_sensor.porch_model.last_changed).total_seconds()
+                 > (states('input_number.sonnette_silence_max') | float(30)) * 60
+             and (this.attributes.last_triggered is none
+                  or (now() - this.attributes.last_triggered).total_seconds() > 86400) }}
+    actions:
+      - action: __NOTIFY_PHONE__
+        data:
+          title: "Sonnette : le service ne classe plus"
+          message: >-
+            Le service doorbell-ai n'a plus prouvé qu'il sait classer une photo
+            depuis {{ ((now() - states.binary_sensor.porch_model.last_changed).total_seconds() | int) // 60 }} min
+            (conteneur arrêté, ou modèle local en panne). Les photos restent
+            écrites ; visites et alertes colis sont aveugles.
+          data:
+            tag: sonnette_service

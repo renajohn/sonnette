@@ -1,0 +1,35 @@
+broker_host: 192.0.2.10
+broker_port: 1883
+ring_prefix: ring/LOC/camera/DEV
+pub_prefix: doorbell/porch
+model_url: http://192.0.2.10:8002/v1/chat/completions
+photos_dir: /photos
+data_dir: /data
+# true: THIS service presses ring-mqtt's snapshot button after a motion or a
+# ding (doorbell/driver.py) -- the one message it ever writes under ring/#.
+# Exactly one party may drive captures: never true while a Home Assistant
+# automation (the old sonnette_photo) still presses the same button.
+# false: passive, nothing is ever asked of the camera.
+active_mode: true
+# Optional, all four read with d.get(...) so an unchanged config.yaml
+# keeps working after a redeploy. Defaults shown; uncomment to override.
+# stale_s: 120.0   # Freshness guard: a motion/ding capture older than this
+                   # many seconds (against its own Ring timestamp) never
+                   # reaches the state machine -- it is still written and
+                   # published, just not allowed to open or extend a visit.
+# serve_port: 8099   # also hardcoded in Dockerfile's EXPOSE and in
+                     # docker-compose.yml's traefik...server.port label --
+                     # change all three together, or Traefik keeps routing
+                     # to the old port.
+# serve_enabled: true
+# retention_days: 180   # Config.load refuses anything below 32: a sane
+                        # minimum, since a small value risks purging most or
+                        # all of the archive in one pass.
+# burst_shots: 5          # presses after each motion/ding, always run to the end
+# burst_interval_s: 11.0  # refused below 11: ring-mqtt drops a request < 10 s
+                          # after the previous one
+# burst_max_shots: 12     # past burst_shots, shooting continues only while a
+                          # visit is open, and never past this
+# ring_silence_s: 960     # ring-mqtt beats every 300 s; silent past this = dead
+# night_start_h: 22       # "last night" on the dashboard: 22:00 -> 06:00
+# night_end_h: 6

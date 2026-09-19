@@ -1,0 +1,532 @@
+# Tableau de bord « Sonnette » — repond en un coup d'oeil a trois questions,
+# dans les mots de l'utilisateur :
+#   1. Est-ce que ma livraison est arrivee aujourd'hui ?
+#   2. Qui a sonne durant la journee ?
+#   3. Est-ce qu'il y a eu des mouvements suspects dans la nuit ?
+#
+# Source de verite : ha/dashboards/sonnette.yaml dans le depot, deploye par
+# deploy/deploy-ha.sh, qui remplace les jetons (NOM entre doubles soulignes)
+# par les valeurs de deploy/deploy.env.
+# Ne pas l'editer sur l'hote.
+#
+# D'ou viennent les donnees : UNE entite, sensor.porch_summary, publiee par le
+# service doorbell-ai (doorbell/summary.py) a partir de ses journaux JSONL --
+# la seule source durable. Plus les entites temps reel du service (visite,
+# personne, animal, derniere photo). Exception : le journal lit l'HISTORIQUE
+# des quatre sensor.porch_journal_* dans le recorder de HA, regle a 90 jours
+# pour cela (configuration.yaml de HA, recorder: purge_keep_days).
+#
+# Ce que le tableau ne doit JAMAIS pretendre (spec §5) :
+# - nommer quelqu'un : le service ne connait ni identite, ni nombre, ni sens
+#   de passage. « Qui a sonne » = des heures et des photos ;
+# - « colis livre » : le signal veut dire « quelqu'un PORTE un carton ». Un
+#   colis pose au sol est dans l'angle mort de la camera (teste).
+#
+# Regles durement acquises, a ne pas redecouvrir :
+# - Photos par le chemin RELATIF /sonnette-photos/<champ photo de l'evenement>.
+#   Aucun nom d'hote : l'URL suit l'origine par laquelle on est arrive, donc
+#   les vignettes chargent aussi bien a la maison que depuis l'exterieur.
+#   Chaque porte d'entree de HA (Traefik sur le reseau local, « tailscale
+#   serve » depuis l'exterieur) monte ce prefixe vers doorbell-ai:8099 et le
+#   retire avant de transmettre. AJOUTER UNE PORTE D'ENTREE SANS Y MONTER CE
+#   PREFIXE CASSE LES VIGNETTES.
+#   Pas de copie sous /config/www, pas d'octet en sauvegarde : les photos
+#   restent dans /media. /media/local/… renvoie 401 dans une carte ;
+#   /api/image_proxy exige un jeton signe, donc l'entite image ne s'affiche
+#   que par une carte picture-entity ; un lien symbolique de /config/www vers
+#   /media ne marche pas (aiohttp, follow_symlinks=False, jamais active).
+#   Ce serveur n'a AUCUNE authentification : ne jamais l'exposer en Funnel,
+#   ni sur une adresse routable depuis Internet.
+# - Noms de fichiers uniques et jamais reecrits : plus besoin du ?v= anti-cache
+#   de l'ancien tableau. Le remettre si des noms fixes reapparaissent.
+# - HTML (<a target="_blank"><img>) et non markdown pour les images : un lien
+#   relatif markdown est intercepte par le routeur de HA.
+# - Une grille d'images = <table> HTML ; des images markdown se placent
+#   chacune sur sa ligne en pleine largeur.
+# - Scalaires litteraux « | » pour le contenu multi-ligne : « >- » replie les
+#   lignes et casse le markdown. Lignes de gabarit collees a gauche : quatre
+#   espaces en tete en font un bloc de code.
+# - Une seule carte tierce, Chronicle Card (HACS, magasin par defaut), pour
+#   le journal : demandee le 2026-09-19 (« tous les evenements avec toutes
+#   les images »). Tout le reste est natif. <ha-alert> et <ha-icon> sont
+#   les seuls elements HA autorises en markdown.
+# - Les conditions de visibilite numeric_state acceptent « attribute ».
+#
+# Mise en page (revue le 2026-09-17, « beaucoup de vide, questions trop au
+# premier niveau ») :
+# - Les REPONSES sont au premier niveau, pas les questions. Un titre dit le
+#   sujet en un mot (Aujourd'hui, Journal) ; la phrase-reponse est en gras dans
+#   la carte. Jamais de titre en forme de question.
+# - Trois colonnes qui ont TOUJOURS du contenu : la photo, les reponses, le
+#   journal. Une section qui peut etre vide (pas de colis, nuit calme) ne doit
+#   jamais etre une colonne a elle seule : c'est ce qui creusait des trous.
+#   Un sujet sans rien a montrer tient en UNE ligne, sans vignette.
+# - Pas de bandeau pleine largeur pour trois mots : sur 3 colonnes, une alerte
+#   courte est une bande vide.
+# - Un seul ecran, et on y change de jour (pas d'onglet « jour par jour »,
+#   essaye puis retire le 2026-09-18 : « pourquoi un nouveau tab ? »). Les
+#   reponses, le journal et les badges lisent sensor.porch_day, le resume
+#   calcule pour input_datetime.sonnette_jour (le service ecoute
+#   doorbell/porch/day/set). La photo en direct, les etats et le graphique
+#   24 h restent ceux du moment. A minuit, le jour affiche revient a
+#   aujourd'hui (automatisation sonnette_jour_minuit).
+# - Sante et reglages sont dans un second onglet : on les consulte quand
+#   quelque chose cloche, pas chaque matin. Un bandeau d'erreur remonte tout
+#   de meme sur la vue principale si le service ou le modele tombe.
+title: Sonnette
+views:
+- title: Porte d'entrée
+  path: porte
+  icon: mdi:doorbell-video
+  type: sections
+  max_columns: 3
+  dense_section_placement: true
+  badges:
+  - type: entity
+    entity: binary_sensor.porte_d_entree_ding
+    name: Ça sonne !
+    icon: mdi:bell-ring
+    color: red
+    show_name: true
+    show_state: false
+    show_icon: true
+    visibility:
+    - condition: state
+      entity: binary_sensor.porte_d_entree_ding
+      state: 'on'
+  - type: entity
+    entity: binary_sensor.porch_visit_in_progress
+    name: Quelqu'un devant la porte
+    icon: mdi:account-eye
+    color: amber
+    show_name: true
+    show_state: false
+    show_icon: true
+    visibility:
+    - condition: state
+      entity: binary_sensor.porch_visit_in_progress
+      state: 'on'
+  - type: entity
+    entity: sensor.porch_day
+    name: Cartons
+    icon: mdi:package-variant-closed
+    color: green
+    state_content: packets_today_n
+    show_name: true
+    show_state: true
+    show_icon: true
+  - type: entity
+    entity: sensor.porch_day
+    name: Sonneries
+    icon: mdi:bell-ring-outline
+    color: red
+    state_content: dings_today_n
+    show_name: true
+    show_state: true
+    show_icon: true
+  - type: entity
+    entity: sensor.porch_day
+    name: Nuit précédente
+    icon: mdi:weather-night
+    color: deep-purple
+    state_content: night_n
+    show_name: true
+    show_state: true
+    show_icon: true
+  - type: entity
+    entity: sensor.porch_day
+    name: Passages
+    icon: mdi:walk
+    color: primary
+    state_content: visits_today
+    show_name: true
+    show_state: true
+    show_icon: true
+  sections:
+  - type: grid
+    column_span: 3
+    cards:
+    - type: tile
+      entity: script.sonnette_jour_decaler
+      name: Jour précédent
+      icon: mdi:chevron-left
+      hide_state: true
+      grid_options:
+        columns: 3
+      tap_action:
+        action: perform-action
+        perform_action: script.sonnette_jour_decaler
+        data:
+          jours: -1
+    - type: tile
+      entity: input_datetime.sonnette_jour
+      name: Jour affiché
+      icon: mdi:calendar
+      grid_options:
+        columns: 4
+    - type: tile
+      entity: script.sonnette_jour_decaler
+      name: Jour suivant
+      icon: mdi:chevron-right
+      hide_state: true
+      grid_options:
+        columns: 3
+      tap_action:
+        action: perform-action
+        perform_action: script.sonnette_jour_decaler
+        data:
+          jours: 1
+    - type: tile
+      entity: script.sonnette_jour_decaler
+      name: Aujourd'hui
+      icon: mdi:calendar-today
+      hide_state: true
+      color: primary
+      grid_options:
+        columns: 2
+      tap_action:
+        action: perform-action
+        perform_action: script.sonnette_jour_decaler
+        data:
+          jours: 0
+  - type: grid
+    cards:
+    - type: heading
+      heading: Devant la porte
+      heading_style: title
+      icon: mdi:cctv
+    - type: picture-entity
+      entity: image.porch_latest_photo
+      show_name: false
+      show_state: false
+    - type: tile
+      entity: binary_sensor.porch_visit_in_progress
+      name: Visite
+      icon: mdi:account-eye
+      color: amber
+      vertical: true
+      grid_options:
+        columns: 4
+    - type: tile
+      entity: binary_sensor.porch_person
+      name: Personne
+      icon: mdi:account
+      color: amber
+      vertical: true
+      grid_options:
+        columns: 4
+    - type: tile
+      entity: binary_sensor.porch_animal
+      name: Animal
+      icon: mdi:paw
+      color: amber
+      vertical: true
+      grid_options:
+        columns: 4
+    - type: markdown
+      content: |
+        {% set v = state_attr('sensor.porch_summary', 'last_visit') %}
+        {% set noms = {'people': 'une personne', 'animal': 'un animal', 'packet': 'un carton'} %}
+        {% if v %}Dernier passage **{{ 'aujourd\'hui' if v.day == now().strftime('%d/%m') else 'le ' ~ v.day }} à {{ v.time }}**{% for x in v.subjects if x in noms %}{{ ' — ' if loop.first else ', ' }}{{ noms[x] }}{% endfor %}{% if v.dings %}, a sonné{% endif %}.{% else %}Aucun passage ces 7 derniers jours.{% endif %}
+    - type: tile
+      entity: script.sonnette_garder
+      name: Garder la photo du dernier passage
+      icon: mdi:archive-arrow-down-outline
+      color: amber
+      hide_state: true
+      tap_action:
+        action: perform-action
+        perform_action: script.sonnette_garder
+        data:
+          quoi: last_visit
+  - type: grid
+    cards:
+    - type: heading
+      heading: Ce jour
+      heading_style: title
+      icon: mdi:calendar-today
+      badges:
+      - type: entity
+        entity: input_datetime.sonnette_jour
+        show_state: true
+        show_icon: false
+    - type: markdown
+      content: |
+        {% set base = '/sonnette-photos/' %}
+        {% set s = 'sensor.porch_day' %}
+        {% set jour = states('input_datetime.sonnette_jour') %}
+        {% set aujourdhui = jour == now().strftime('%Y-%m-%d') %}
+        {% set colis = state_attr(s, 'packets_today') or [] %}
+        {% set dings = state_attr(s, 'dings_today') or [] %}
+        {% set nuit = state_attr(s, 'night') or [] %}
+        {% set dc = state_attr(s, 'last_packet') %}
+        {% set dd = state_attr(s, 'last_ding') %}
+        {% set nf = (state_attr(s, 'night_from') or '')[6:] %}
+        {% set nt = (state_attr(s, 'night_to') or '')[6:] %}
+        {% set noms = {'people': 'mdi:account', 'animal': 'mdi:paw', 'packet': 'mdi:package-variant-closed'} %}
+        {% if states(s) in ['unavailable', 'unknown'] %}
+        <ha-alert alert-type="error" title="Service injoignable">Ces réponses ne sont pas à jour.</ha-alert>
+        {% elif not is_state('binary_sensor.porch_model', 'on') %}
+        <ha-alert alert-type="error" title="Le service ne classe plus">Les photos sont écrites mais plus analysées : ces réponses sont aveugles.</ha-alert>
+        {% elif is_state('binary_sensor.porch_ring_link', 'off') %}
+        <ha-alert alert-type="error" title="Ring est muet">ring-mqtt ne donne plus signe de vie : aucune photo n'arrive.</ha-alert>
+        {% endif %}
+        {% if states(s) not in ['unavailable', 'unknown'] and states(s) != jour %}
+        <ha-alert alert-type="info" title="Chargement du {{ jour }}">Un instant.</ha-alert>
+        {% endif %}
+        {% if colis %}
+        <ha-alert alert-type="success" title="Livraison probable à {{ colis | map(attribute='time') | reverse | join(', ') }}">Quelqu'un a été vu avec un carton.</ha-alert>
+
+        <table width="100%"><tr>{% for c in colis[:4] %}<td width="50%"><a href="{{ base }}{{ c.photo }}" target="_blank"><img src="{{ base }}{{ c.photo }}" width="100%"></a></td>{% if loop.index % 2 == 0 and not loop.last %}</tr><tr>{% endif %}{% endfor %}{% if colis[:4] | length % 2 %}<td width="50%"></td>{% endif %}</tr></table>
+        {% else %}
+        <ha-icon icon="mdi:package-variant-closed"></ha-icon> **Pas de livraison vue.**{% if dc and aujourdhui %} Dernier carton aperçu le {{ dc.day }} à {{ dc.time }}.{% endif %}
+        {% endif %}
+
+        {% if dings %}
+        <ha-alert alert-type="warning" title="On a sonné à {{ dings | map(attribute='time') | reverse | join(', ') }}"></ha-alert>
+
+        <table width="100%"><tr>{% for d in dings[:4] %}<td width="50%" align="center">{% if d.photo %}<a href="{{ base }}{{ d.photo }}" target="_blank"><img src="{{ base }}{{ d.photo }}" width="100%"></a><br>{% endif %}{{ d.time }}</td>{% if loop.index % 2 == 0 and not loop.last %}</tr><tr>{% endif %}{% endfor %}{% if dings[:4] | length % 2 %}<td width="50%"></td>{% endif %}</tr></table>
+        {% else %}
+        <ha-icon icon="mdi:bell-off-outline"></ha-icon> **Personne n'a sonné.**{% if dd and aujourdhui %} Dernière sonnerie le {{ dd.day }} à {{ dd.time }}.{% endif %}
+        {% endif %}
+
+        {% if nuit %}
+        <ha-alert alert-type="warning" title="{{ 'Cette nuit' if aujourdhui else 'La nuit précédente' }} : {{ nuit | length }} passage{{ 's' if nuit | length > 1 else '' }}">{% for v in nuit | reverse %}{{ v.time }} {% for x in v.subjects if x in noms %}<ha-icon icon="{{ noms[x] }}"></ha-icon>{% endfor %}{{ ' · ' if not loop.last else '' }}{% endfor %}</ha-alert>
+
+        <table width="100%"><tr>{% for v in (nuit | selectattr('photos') | list)[:4] %}<td width="50%" align="center"><a href="{{ base }}{{ v.photos[0] }}" target="_blank"><img src="{{ base }}{{ v.photos[0] }}" width="100%"></a><br>{{ v.time }}</td>{% if loop.index % 2 == 0 and not loop.last %}</tr><tr>{% endif %}{% endfor %}</tr></table>
+        {% else %}
+        <ha-icon icon="mdi:weather-night"></ha-icon> **{{ 'Nuit calme' if aujourdhui else 'Nuit précédente calme' }}** — aucun passage entre {{ nf }} et {{ nt }}.
+        {% endif %}
+    - type: tile
+      entity: script.sonnette_garder
+      name: Garder la photo de sonnerie
+      icon: mdi:archive-arrow-down-outline
+      color: red
+      hide_state: true
+      grid_options:
+        columns: 6
+      tap_action:
+        action: perform-action
+        perform_action: script.sonnette_garder
+        data:
+          quoi: last_ding
+      visibility:
+      - condition: numeric_state
+        entity: sensor.porch_summary
+        attribute: dings_7d
+        above: 0
+    - type: tile
+      entity: script.sonnette_garder
+      name: Garder la photo du carton
+      icon: mdi:archive-arrow-down-outline
+      color: green
+      hide_state: true
+      grid_options:
+        columns: 6
+      tap_action:
+        action: perform-action
+        perform_action: script.sonnette_garder
+        data:
+          quoi: last_packet
+      visibility:
+      - condition: numeric_state
+        entity: sensor.porch_summary
+        attribute: packets_7d
+        above: 0
+    - type: markdown
+      content: |
+        <ha-icon icon="mdi:information-outline"></ha-icon> *« Vu avec un carton » n'est pas « colis déposé » : un colis posé au sol est dans l'angle mort de la caméra. Le système ne reconnaît personne : il donne des heures et des photos.*
+  - type: grid
+    cards:
+    - type: heading
+      heading: Journal
+      heading_style: title
+      icon: mdi:timeline-clock-outline
+    # Chronicle Card (HACS) : une ligne par photo retenue, lue dans
+    # l'HISTORIQUE de quatre capteurs du service (sensor.porch_journal_*),
+    # dont l'etat est l'heure a la seconde et l'attribut photo le chemin
+    # relatif. Le titre d'une ligne = nom de l'entite + etat : « Personne
+    # 07:46:15 ». La carte saute les etats unknown/unavailable ET la
+    # transition qui en sort : c'est pourquoi ces capteurs sont retenus et
+    # sans availability (publisher.py). Le sélecteur de jour ci-dessus ne
+    # pilote pas cette carte : elle montre days_back jours, groupés par
+    # date, et le recorder les garde 90 jours (configuration.yaml).
+    # Les boutons « Photo » ouvrent l'image complete dans un nouvel onglet :
+    # une URL ABSOLUE est obligatoire ici (un chemin relatif serait pris
+    # pour une page de HA), d'ou un bouton par porte d'entree.
+    - type: custom:chronicle-card
+      show_header: false
+      layout: vertical
+      days_back: 90
+      max_events: 2000
+      time_format: 24h
+      language: fr
+      appearance:
+        card_height: 780px
+        show_images: true
+        show_icons: true
+        show_severity_badge: false
+        show_source_badge: false
+        show_category: false
+        animate_new_events: true
+      grouping:
+        enabled: false
+      sources:
+      - type: history
+        name: Journal
+        entities:
+        - sensor.porch_journal_personne
+        - sensor.porch_journal_animal
+        - sensor.porch_journal_carton
+        - sensor.porch_journal_sonnerie
+        image_template: "{% if attributes.photo %}/sonnette-photos/{{ attributes.photo }}{% endif %}"
+        entity_config:
+          sensor.porch_journal_personne:
+            name: Personne
+            icon: mdi:account
+            color: "#e6a100"
+          sensor.porch_journal_animal:
+            name: Animal
+            icon: mdi:paw
+            color: "#2e9e5b"
+          sensor.porch_journal_carton:
+            name: Carton
+            icon: mdi:package-variant-closed
+            color: "#8b5a2b"
+          sensor.porch_journal_sonnerie:
+            name: Sonnerie
+            icon: mdi:bell-ring
+            color: "#d93025"
+        actions:
+        - label: Photo (maison)
+          icon: mdi:home
+          type: navigate
+          url: __HA_URL_LAN__{media_url}
+        - label: Photo (dehors)
+          icon: mdi:earth
+          type: navigate
+          url: __HA_URL_REMOTE__{media_url}
+  - type: grid
+    column_span: 2
+    cards:
+    - type: heading
+      heading: 24 heures
+      heading_style: subtitle
+      icon: mdi:chart-timeline
+    - type: history-graph
+      hours_to_show: 24
+      grid_options:
+        columns: full
+      entities:
+      - entity: binary_sensor.porch_person
+        name: Personne
+      - entity: binary_sensor.porch_animal
+        name: Animal
+      - entity: binary_sensor.porte_d_entree_ding
+        name: Sonnerie
+      - entity: binary_sensor.porte_d_entree_motion
+        name: Mouvement
+  - type: grid
+    cards:
+    - type: heading
+      heading: 7 jours
+      heading_style: subtitle
+      icon: mdi:chart-box-outline
+    - type: tile
+      entity: sensor.porch_summary
+      name: Passages
+      icon: mdi:walk
+      state_content: visits_7d
+      color: blue
+      tap_action:
+        action: none
+      grid_options:
+        columns: 6
+    - type: tile
+      entity: sensor.porch_summary
+      name: Sonneries
+      icon: mdi:bell-ring-outline
+      state_content: dings_7d
+      color: red
+      tap_action:
+        action: none
+      grid_options:
+        columns: 6
+    - type: tile
+      entity: sensor.porch_summary
+      name: Cartons
+      icon: mdi:package-variant-closed
+      state_content: packets_7d
+      color: green
+      tap_action:
+        action: none
+      grid_options:
+        columns: 6
+    - type: tile
+      entity: sensor.porch_summary
+      name: Heure de pointe
+      icon: mdi:clock-outline
+      state_content: peak_hour
+      color: purple
+      tap_action:
+        action: none
+      grid_options:
+        columns: 6
+- title: Santé et réglages
+  path: sante
+  icon: mdi:heart-pulse
+  type: sections
+  max_columns: 2
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Santé
+      heading_style: title
+      icon: mdi:heart-pulse
+    - type: tile
+      entity: binary_sensor.porch_model
+      name: Le service sait classer
+      icon: mdi:brain
+      color: green
+    - type: tile
+      entity: binary_sensor.porch_ring_link
+      name: ring-mqtt est vivant
+      icon: mdi:access-point
+      color: green
+    - type: tile
+      entity: sensor.porte_d_entree_wireless
+      name: Signal Wi-Fi de la sonnette
+      icon: mdi:wifi
+    - type: entities
+      entities:
+      - entity: sensor.porch_summary
+        name: Résumé mis à jour
+        icon: mdi:database-clock-outline
+        secondary_info: last-updated
+      - entity: sensor.porch_summary
+        type: attribute
+        attribute: archived
+        name: Photos gardées (hors purge)
+        icon: mdi:archive-outline
+  - type: grid
+    cards:
+    - type: heading
+      heading: Réglages
+      heading_style: title
+      icon: mdi:tune
+    - type: tile
+      entity: switch.porte_d_entree_motion_detection
+      name: Détection de mouvement
+      icon: mdi:motion-sensor
+      features:
+      - type: toggle
+    - type: entities
+      entities:
+      - entity: input_number.sonnette_colis_delai
+        name: Attente d'une sonnerie après un colis
+      - entity: input_number.sonnette_silence_max
+        name: Silence toléré avant alerte
+    - type: markdown
+      content: |
+        Les photos sont purgées après 180 jours, sauf celles que vous gardez. Ne jamais activer le flux vidéo en direct de la sonnette : cela supprime les alertes de mouvement, application Ring comprise.
