@@ -64,7 +64,9 @@ Commande acceptée par le service : `doorbell/porch/archive/set` (charge = le ch
 3. **Portainer** : *Stacks > Add stack > Repository*, URL de ce dépôt, branche `main`,
    chemin `docker-compose.yml`, et les variables `SERVICE_HOME`, `PHOTOS_HOST_DIR`,
    `PHOTOS_HOST` (et `TZ` au besoin). Portainer construit l'image depuis `service/`.
-   Reporter dans `deploy.env` le numéro de la pile et de l'endpoint.
+   Activer *GitOps updates* par scrutation (5 min) : un push sur `main` redéploie la
+   pile tout seul (un webhook est impossible, Portainer n'est pas joignable depuis
+   GitHub). Reporter dans `deploy.env` le numéro de la pile et de l'endpoint.
 4. **Home Assistant**, dans `configuration.yaml` : `packages: !include_dir_named packages`
    sous `homeassistant:`, le tableau en mode YAML (`lovelace: dashboards:` avec
    `filename: dashboards/sonnette.yaml`), et le recorder à 90 jours pour le journal
@@ -78,14 +80,20 @@ Commande acceptée par le service : `doorbell/porch/archive/set` (charge = le ch
 
 ### Ensuite
 
+**Le service se déploie tout seul** : Portainer scrute `main` toutes les 5 minutes et
+redéploie la pile à chaque nouveau commit. Le conteneur n'est recréé que si le compose
+ou l'image changent ; l'image n'est reconstruite que si son étiquette est nouvelle, d'où
+la règle : **tout changement du service s'accompagne d'un changement de version**. Cette
+mise à jour automatique ne connaît pas la fenêtre d'événement : pousser un changement de
+version quand personne n'est attendu à la porte.
+
 ```sh
-deploy/deploy-service.sh     # Portainer : pull and redeploy de la pile, apres verification du silence
+deploy/deploy-service.sh     # sans attendre la scrutation : pull and redeploy, apres verification du silence
 deploy/deploy-ha.sh          # rend les jetons, copie package + tableau, sauvegardes horodatees, check_config
 ```
 
 `deploy-service.sh` exige un dépôt propre et poussé (Portainer déploie le remote) et
-refuse de redémarrer le conteneur si une photo a moins de 3 minutes : on n'agit jamais
-pendant une fenêtre d'événement. `deploy-ha.sh` ne recharge rien ; après un exit 0,
+refuse de redémarrer le conteneur si une photo a moins de 3 minutes. `deploy-ha.sh` ne recharge rien ; après un exit 0,
 recharger « Toute la configuration YAML » dans HA. Un changement du recorder demande
 un redémarrage de HA.
 

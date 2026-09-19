@@ -1,5 +1,7 @@
 #!/bin/sh
-# Redeploie le service depuis le depot Git, par Portainer.
+# Redeploie le service depuis le depot Git, par Portainer, sans attendre la
+# scrutation automatique (GitOps updates, 5 min) qui fait la meme chose a
+# chaque nouveau commit sur main -- mais sans la verification du silence.
 #
 # La pile Portainer est une pile « Repository » pointant sur ce depot (voir
 # docker-compose.yml en tete) : Portainer clone, construit l'image depuis
