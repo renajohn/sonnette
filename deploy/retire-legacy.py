@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
-"""Retire l'ancien systeme de sonnette de la configuration Home Assistant.
+"""Removes the old doorbell system from the Home Assistant configuration.
 
-A executer DANS le conteneur homeassistant (plusieurs fichiers sont a root) :
+To run INSIDE the homeassistant container (several files belong to root):
 
     docker cp deploy/retire-legacy.py homeassistant:/tmp/ && \
     docker exec homeassistant python /tmp/retire-legacy.py [--dry-run]
 
-Geste unique, fait le 2026-09-17 ; garde au depot pour memoire et parce qu'il
-est rejouable sans danger : chaque etape est idempotente, et chaque fichier
-modifie recoit d'abord une sauvegarde horodatee. Rien n'est supprime du disque :
-les scripts et les copies de /config/www sont DEPLACES sous retire-2026-09-17/.
+One-off action, done on 2026-09-17; kept in the repository for the record
+and because it can be replayed safely: every step is idempotent, and every
+modified file first gets a timestamped backup. Nothing is deleted from the
+disk: the scripts and the copies in /config/www are MOVED under
+retire-2026-09-17/.
 
-Ne touche PAS aux photos de /media/sonnette : leur suppression a ete un geste
-separe, decide par l'utilisateur, apres copie de la photo gardee a la main.
+Does NOT touch the photos in /media/sonnette: deleting them was a separate
+action, decided by the user, after copying the kept photo by hand.
 
-Prealable non negociable (handover §4) : le service pilote deja les captures
-(active_mode: true, prouve sur un vrai mouvement) et les six automatisations
-ci-dessous sont desactivees. L'inverse ferait tomber l'entree du service de
-six photos a une par visite.
+Non-negotiable precondition (handover section 4): the service already
+drives the captures (active_mode: true, proven on a real motion) and the
+six automations below are disabled. The opposite would drop the input of
+the service from six photos to one per visit.
 
-Apres un exit 0 : check_config, puis recharger automatisations, scripts et
-entites command_line. Les services shell_command.sonnette_* ne disparaissent
-qu'au prochain redemarrage de HA ; ils n'ont plus aucun appelant.
+After an exit 0: check_config, then reload automations, scripts and
+command_line entities. The shell_command.sonnette_* services only disappear
+at the next HA restart; they no longer have any caller.
 """
 import re
 import shutil
@@ -41,15 +42,15 @@ SCRIPTS = {"sonnette_purger_vides", "sonnette_archiver_sonnerie",
 
 def save(path, text):
     if DRY:
-        print(f"   [dry-run] {path} : {len(path.read_text())} -> {len(text)} octets")
+        print(f"   [dry-run] {path}: {len(path.read_text())} -> {len(text)} bytes")
         return
     shutil.copy2(path, f"{path}.bak-{STAMP}")
     path.write_text(text)
 
 
 def blocks(text, start):
-    """Decoupe en blocs dont la premiere ligne verifie `start`; le preambule
-    eventuel est le bloc 0."""
+    """Splits into blocks whose first line satisfies `start`; the optional
+    preamble is block 0."""
     out = [[]]
     for line in text.splitlines(keepends=True):
         if start(line):
@@ -65,7 +66,7 @@ def automations():
     for b in parts:
         m = re.match(r"- id:\s*['\"]?([^'\"\s]+)", b)
         (dropped if m and m.group(1) in AUTOMATIONS else kept).append(b)
-    print(f"automations.yaml : {len(dropped)} retiree(s), {len(kept) - 1} conservee(s)")
+    print(f"automations.yaml: {len(dropped)} removed, {len(kept) - 1} kept")
     if dropped:
         save(path, "".join(kept))
 
@@ -75,15 +76,15 @@ def scripts():
     parts = blocks(path.read_text(), lambda l: re.match(r"^[A-Za-z0-9_]+:", l))
     kept = [b for b in parts
             if not (re.match(r"^([A-Za-z0-9_]+):", b) or [None, ""])[1] in SCRIPTS]
-    print(f"scripts.yaml : {len(parts) - len(kept)} retire(s)")
+    print(f"scripts.yaml: {len(parts) - len(kept)} removed")
     if len(kept) != len(parts):
         save(path, "".join(kept))
 
 
 def configuration():
-    """Retire shell_command: (que des sonnette_*) et command_line: (le seul
-    capteur sonnette_statistiques), avec les commentaires qui les precedent.
-    Refuse d'agir si l'un des deux blocs porte autre chose."""
+    """Removes shell_command: (only sonnette_* entries) and command_line: (the
+    single sonnette_statistiques sensor), with the comments that precede them.
+    Refuses to act if either block carries anything else."""
     path = CONFIG / "configuration.yaml"
     lines = path.read_text().splitlines(keepends=True)
 
@@ -118,9 +119,9 @@ def configuration():
             entries = [l for l in body if "unique_id:" in l]
             foreign = [l for l in entries if "sonnette_statistiques" not in l]
         if foreign or not entries:
-            sys.exit(f"configuration.yaml : le bloc {key}: porte autre chose que la "
-                     f"sonnette, je n'y touche pas : {foreign!r}")
-        print(f"configuration.yaml : bloc {key}: retire (lignes {k + 1}-{j})")
+            sys.exit(f"configuration.yaml: the {key}: block carries something other "
+                     f"than the doorbell, leaving it alone: {foreign!r}")
+        print(f"configuration.yaml: {key}: block removed (lines {k + 1}-{j})")
         del lines[k:j]
         removed += 1
     if removed:
@@ -134,7 +135,7 @@ def files():
         if not found:
             continue
         target = folder / "retire-2026-09-17"
-        print(f"{folder} : {len(found)} element(s) -> {target.name}/")
+        print(f"{folder}: {len(found)} item(s) -> {target.name}/")
         if DRY:
             continue
         target.mkdir(exist_ok=True)
@@ -146,4 +147,4 @@ automations()
 scripts()
 configuration()
 files()
-print("dry-run : rien n'a ete ecrit" if DRY else "fait")
+print("dry-run: nothing was written" if DRY else "done")

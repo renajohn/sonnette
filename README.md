@@ -1,162 +1,182 @@
 # Sonnette
 
-Tout le système de la sonnette d'entrée (Ring, via ring-mqtt) tient dans ce dépôt :
-le service qui pilote, écrit et classe les photos ; ce que Home Assistant fait autour
-(notifications, tableau de bord) ; et de quoi déployer les deux.
+> ## ⚠️ AI SLOP — vibe coded for single use
+>
+> This repository was written with an AI assistant for exactly one house, one
+> doorbell and one Home Assistant. It works there. It has never run anywhere else.
+> **More fragile than a snowman in a sauna.** Read everything before you trust
+> anything, and expect to change most of it for your own setup.
+
+Everything about the front door doorbell (Ring, through ring-mqtt) lives in this
+repository: the service that drives, stores and classifies the photos; what Home
+Assistant does around it (notifications, dashboard); and what is needed to deploy
+both.
 
 ```
 Ring ──► ring-mqtt ──MQTT──► doorbell-ai (service/) ──MQTT──► Home Assistant (ha/)
-              ▲                  │  photos, registre, journaux        │
-              └── PRESS ─────────┘  photos par /sonnette-photos/…   └─► téléphone, tableau de bord
+              ▲                  │  photos, ledger, logs                 │
+              └── PRESS ─────────┘  photos at /sonnette-photos/…       └─► phone, dashboard
 ```
 
-ring-mqtt n'est **pas** dans ce dépôt et n'a pas à y être : c'est la passerelle vers
-Ring, elle reste telle quelle.
+ring-mqtt is **not** in this repository and does not need to be: it is the gateway
+to Ring, and it stays as it is.
 
-## Qui fait quoi
+## Who does what
 
 | | |
 |---|---|
-| `docker-compose.yml` | La pile Portainer du service, déployable telle quelle depuis ce dépôt (voir *Déployer*). Construit l'image depuis `service/`. |
-| `service/` | Conteneur `doorbell-ai`. Presse le bouton d'instantané après un mouvement ou une sonnerie (`driver.py`), écrit chaque photo, la classe par un modèle local (API compatible OpenAI, image + question), tient la machine à états des visites, publie entités et événements par MQTT, calcule le résumé du jour (`summary.py`), garde les photos choisies (`archive.py`), purge à 180 jours, sert les photos en HTTP (`webserve.py`). |
-| `ha/packages/sonnette.yaml` | Ce que seul HA peut faire : les avis sur le téléphone (sonnerie, colis sans sonnerie, confirmation « Gardée », deux supervisions) et les réglages (`input_number`, jour affiché). Aucun script shell, aucun fichier écrit par HA. |
-| `ha/dashboards/sonnette.yaml` | Le tableau de bord. Répond à trois questions : ma livraison est-elle arrivée, qui a sonné aujourd'hui, y a-t-il eu du mouvement cette nuit. Le journal est une carte tierce, Chronicle Card (HACS), qui lit l'historique des `sensor.porch_journal_*`. |
-| `deploy/` | `deploy-service.sh` (redéploiement par Portainer), `deploy-ha.sh` (package et tableau), `render.sh` (jetons), `deploy.env.example` (modèle des valeurs propres à une installation), et deux gestes uniques gardés pour mémoire : `retire-legacy.py`, `inject-journal.py`. |
+| `docker-compose.yml` | The Portainer stack for the service, deployable as is from this repository (see *Deploy*). Pulls the image that the GitHub action publishes. |
+| `.github/workflows/image.yml` | On every push to `main` that touches `service/`: runs the tests, then builds the image and publishes it to `ghcr.io/<owner>/sonnette:<version>` and `:latest`. |
+| `service/` | Container `doorbell-ai`. Presses the snapshot button after a motion or a ring (`driver.py`), writes every photo, classifies it with a local model (OpenAI-compatible API, image plus question), runs the visit state machine, publishes entities and events over MQTT, computes the day summary (`summary.py`), keeps the chosen photos (`archive.py`), purges after 180 days, serves the photos over HTTP (`webserve.py`). |
+| `ha/packages/sonnette.yaml` | What only HA can do: phone notifications (ring, parcel without a ring, "Kept" confirmation, two supervisions) and the settings (`input_number`, displayed day). No shell script, no file written by HA. |
+| `ha/dashboards/sonnette.yaml` | The dashboard. Answers three questions: did my delivery arrive, who rang today, was there movement last night. The journal is a third-party card, Chronicle Card (HACS), reading the history of the `sensor.porch_journal_*` entities. |
+| `deploy/` | `deploy-service.sh` (redeploy through Portainer), `deploy-ha.sh` (package and dashboard), `render.sh` (tokens), `deploy.env.example` (template of the values specific to one installation), and two one-off scripts kept for the record: `retire-legacy.py`, `inject-journal.py`. |
 
-Tout ce qui est propre à une installation (noms d'hôte, chemins, comptes, cibles de
-notification) vit dans `deploy/deploy.env`, ignoré par git, et dans les variables de la
-pile Portainer. Le dépôt n'en contient aucun.
+Everything specific to one installation (host names, paths, accounts, notification
+targets) lives in `deploy/deploy.env`, ignored by git, and in the Portainer stack
+variables. The repository contains none of it.
 
-## Entités dans Home Assistant (découverte MQTT, dispositif « Porch »)
+The texts shown inside Home Assistant (dashboard labels, notifications) are in French
+on purpose: that is the language of the house.
 
-| Entité | Rôle |
+## Entities in Home Assistant (MQTT discovery, device "Porch")
+
+| Entity | Role |
 |---|---|
-| `event.porch` | `visit_started`, `visit_ended` (avec `photos` et `dings`), `packet_seen`, `ding` |
-| `binary_sensor.porch_visit_in_progress` | une visite est en cours |
-| `binary_sensor.porch_person`, `binary_sensor.porch_animal` | du premier aperçu à la fin de la visite |
-| `image.porch_latest_photo` | dernière photo non vide |
-| `sensor.porch_summary` | le résumé du jour ; le tableau de bord lit ses attributs |
-| `sensor.porch_day` | le même résumé pour le jour choisi sur le tableau (`doorbell/porch/day/set`) |
-| `sensor.porch_journal_personne`, `_animal`, `_carton`, `_sonnerie` | le journal : une entrée par photo retenue, état = heure à la seconde, attribut `photo`. Retenus, sans availability. Leur **historique** dans le recorder est le journal du tableau (Chronicle Card) |
-| `binary_sensor.porch_ring_link` | ring-mqtt est vivant : calculé par le service sur **chaque** battement (`watch.py`), `off` après 16 min de silence |
-| `binary_sensor.porch_model` | le service **sait classer** (sonde d'inférence toutes les 5 min) ; expire après 15 min de silence |
+| `event.porch` | `visit_started`, `visit_ended` (with `photos` and `dings`), `packet_seen`, `ding` |
+| `binary_sensor.porch_visit_in_progress` | a visit is in progress |
+| `binary_sensor.porch_person`, `binary_sensor.porch_animal` | from the first sighting to the end of the visit |
+| `image.porch_latest_photo` | latest non-empty photo |
+| `sensor.porch_summary` | the day summary; the dashboard reads its attributes |
+| `sensor.porch_day` | the same summary for the day chosen on the dashboard (`doorbell/porch/day/set`) |
+| `sensor.porch_journal_personne`, `_animal`, `_carton`, `_sonnerie` | the journal: one entry per kept photo, state = time to the second, attribute `photo`. Retained, no availability. Their **history** in the recorder is the dashboard journal (Chronicle Card) |
+| `binary_sensor.porch_ring_link` | ring-mqtt is alive: computed by the service on **every** heartbeat (`watch.py`), `off` after 16 min of silence |
+| `binary_sensor.porch_model` | the service **can classify** (inference probe every 5 min); expires after 15 min of silence |
 
-Commande acceptée par le service : `doorbell/porch/archive/set` (charge = le champ
-`photo` d'un événement) ; réponse sur `doorbell/porch/archive/result`.
+Command accepted by the service: `doorbell/porch/archive/set` (payload = the `photo`
+field of an event); answer on `doorbell/porch/archive/result`.
 
-## Ce que le système ne prétend jamais
+## What the system never claims
 
-- **Nommer quelqu'un.** Ni identité, ni nombre de personnes, ni sens de passage.
-  « Qui a sonné » = des heures et des photos.
-- **« Colis livré ».** `packet_seen` veut dire « quelqu'un a été vu portant un carton ».
-  Un colis posé au sol est dans l'angle mort de la caméra.
+- **To name someone.** No identity, no head count, no direction of travel.
+  "Who rang" = times and photos.
+- **"Parcel delivered".** `packet_seen` means "someone was seen carrying a box".
+  A parcel left on the ground is in the camera's blind spot.
 
-## Déployer
+## Deploy
 
-### Une seule fois
+### Once
 
-1. **Valeurs de l'installation** : copier `deploy/deploy.env.example` en
-   `deploy/deploy.env` et le remplir. Les scripts exigent `ssh $HOST`, `$PORTAINER`
-   (clé d'API Portainer) et `$HA` (jeton Home Assistant) dans l'environnement.
-2. **Sur l'hôte** : créer `$SERVICE_HOME/data/config.yaml` (modèle :
-   `service/config.example.yaml`, il porte les identifiants de l'appareil Ring) et
-   `$PHOTOS_HOST_DIR`, un sous-dossier à lui sous le dossier `media` de HA.
-3. **Portainer** : *Stacks > Add stack > Repository*, URL de ce dépôt, branche `main`,
-   chemin `docker-compose.yml`, et les variables `SERVICE_HOME`, `PHOTOS_HOST_DIR`,
-   `PHOTOS_HOST` (et `TZ` au besoin). Portainer construit l'image depuis `service/`.
-   Activer *GitOps updates* par scrutation (5 min) : un push sur `main` redéploie la
-   pile tout seul (un webhook est impossible, Portainer n'est pas joignable depuis
-   GitHub). Reporter dans `deploy.env` le numéro de la pile et de l'endpoint.
-4. **Home Assistant**, dans `configuration.yaml` : `packages: !include_dir_named packages`
-   sous `homeassistant:`, le tableau en mode YAML (`lovelace: dashboards:` avec
-   `filename: dashboards/sonnette.yaml`), et le recorder à 90 jours pour le journal
-   (`recorder: purge_keep_days: 90`, en excluant ce qui pèse). Installer **Chronicle
-   Card** par HACS (magasin par défaut).
-5. **Portes d'entrée de HA** : chaque reverse proxy par lequel on ouvre HA (Traefik sur
-   le réseau local, « tailscale serve » depuis l'extérieur) doit monter le préfixe
-   `/sonnette-photos/` vers `doorbell-ai:8099` et le retirer avant de transmettre.
-   Le tableau référence les photos par ce chemin relatif ; sans ce montage, aucune
-   vignette ne charge.
+1. **Installation values**: copy `deploy/deploy.env.example` to `deploy/deploy.env`
+   and fill it in. The scripts need `ssh $HOST`, `$PORTAINER` (Portainer API key) and
+   `$HA` (Home Assistant token) in the environment.
+2. **On the host**: create `$SERVICE_HOME/data/config.yaml` (template:
+   `service/config.example.yaml`; it holds the Ring device identifiers) and
+   `$PHOTOS_HOST_DIR`, a folder of its own under the HA `media` folder.
+3. **Portainer**: *Stacks > Add stack > Repository*, URL of this repository, branch
+   `main`, path `docker-compose.yml`, and the variables `SERVICE_HOME`,
+   `PHOTOS_HOST_DIR`, `PHOTOS_HOST` (and `TZ` if needed). Enable *GitOps updates* by
+   polling (5 min): a push to `main` redeploys the stack by itself (a webhook is
+   impossible, Portainer cannot be reached from GitHub). Write the stack and endpoint
+   numbers into `deploy.env`. The image comes from the GitHub container registry, so
+   the package `sonnette` must be public (it inherits the repository's visibility) or
+   the host must be logged in to `ghcr.io`. Portainer's update job pulls before it
+   deploys: a `build:` in the compose file is not enough, the image has to exist in a
+   registry.
+4. **Home Assistant**, in `configuration.yaml`: `packages: !include_dir_named packages`
+   under `homeassistant:`, the dashboard in YAML mode (`lovelace: dashboards:` with
+   `filename: dashboards/sonnette.yaml`), and the recorder at 90 days for the journal
+   (`recorder: purge_keep_days: 90`, excluding what is heavy). Install **Chronicle
+   Card** through HACS (default store).
+5. **HA front doors**: every reverse proxy that opens HA (Traefik on the local network,
+   "tailscale serve" from outside) must mount the prefix `/sonnette-photos/` to
+   `doorbell-ai:8099` and strip it before forwarding. The dashboard references the
+   photos by that relative path; without this mount, no thumbnail loads.
 
-### Ensuite
+### Then
 
-**Le service se déploie tout seul** : Portainer scrute `main` toutes les 5 minutes et
-redéploie la pile à chaque nouveau commit. Le conteneur n'est recréé que si le compose
-ou l'image changent ; l'image n'est reconstruite que si son étiquette est nouvelle, d'où
-la règle : **tout changement du service s'accompagne d'un changement de version**. Cette
-mise à jour automatique ne connaît pas la fenêtre d'événement : pousser un changement de
-version quand personne n'est attendu à la porte.
+**The service deploys itself**: a push to `main` that touches `service/` runs the
+tests and publishes the image (about two minutes); Portainer polls `main` every 5
+minutes and redeploys the stack on every new commit. The container is recreated only
+if the compose file or the image change, and the compose file pins the image tag.
+Hence the rule: **every change to the service comes with a version change**, in
+`service/pyproject.toml` and in `docker-compose.yml`, in the same commit. If Portainer
+polls before the image is published, its job fails once ("manifest unknown") and
+succeeds at the next poll. This automatic update knows nothing about the event
+window: push a version change when nobody is expected at the door.
 
 ```sh
-deploy/deploy-service.sh     # sans attendre la scrutation : pull and redeploy, apres verification du silence
-deploy/deploy-ha.sh          # rend les jetons, copie package + tableau, sauvegardes horodatees, check_config
+deploy/deploy-service.sh     # without waiting for the poll: pull and redeploy, after checking for silence
+deploy/deploy-ha.sh          # renders the tokens, copies package + dashboard, timestamped backups, check_config
 ```
 
-`deploy-service.sh` exige un dépôt propre et poussé (Portainer déploie le remote) et
-refuse de redémarrer le conteneur si une photo a moins de 3 minutes. `deploy-ha.sh` ne recharge rien ; après un exit 0,
-recharger « Toute la configuration YAML » dans HA. Un changement du recorder demande
-un redémarrage de HA.
+`deploy-service.sh` requires a clean, pushed repository (Portainer deploys the remote)
+and refuses to restart the container if a photo is less than 3 minutes old.
+`deploy-ha.sh` reloads nothing; after an exit 0, reload "All YAML configuration" in HA.
+A recorder change needs an HA restart.
 
-Changer de version : `version` dans `service/pyproject.toml` **et** `image:` dans
-`docker-compose.yml` (le script vérifie qu'ils concordent).
+Changing version: `version` in `service/pyproject.toml` **and** `image:` in
+`docker-compose.yml` (the script checks that they match).
 
 ## Tests
 
-Le service exige Python ≥ 3.13. Sur une machine qui ne l'a pas, dans un conteneur :
+The service needs Python 3.13 or newer. On a machine without it, in a container:
 
 ```sh
 docker run --rm -v "$PWD/service":/src:ro -w /work python:3.13-slim sh -c \
   'pip -q install paho-mqtt==2.1.0 "PyYAML>=6" "pytest>=8" && cp -r /src/. . && python -m pytest -q'
 ```
 
-La bande d'essai `service/tests/tapes/` est un enregistrement MQTT réel, **anonymisé** :
-identifiants de l'appareil remplacés par `LOC`/`DEV`, images remplacées par des images
-synthétiques (mêmes doublons), secret RTSP et nom du Wi-Fi retirés. `probe.jpg`, l'image
-de sonde du classificateur, est synthétique elle aussi.
+The test tape in `service/tests/tapes/` is a real MQTT recording, **anonymised**:
+device identifiers replaced by `LOC`/`DEV`, images replaced by synthetic images (same
+duplicates), RTSP secret and Wi-Fi name removed. `probe.jpg`, the classifier's probe
+image, is synthetic too.
 
-Méthode de la maison : **faire saboter plutôt que relire.** Toute garde nouvelle est
-vérifiée par mutation (on la casse, un test doit rougir). Le câblage
-`visite ouverte → rafale prolongée` a été trouvé ainsi, pas à la lecture.
+The GitHub action runs the same tests before publishing an image.
 
-## Règles à ne jamais redécouvrir
+House method: **sabotage rather than proofread.** Every new guard is checked by
+mutation (break it, a test must go red). The wiring `open visit -> extended burst` was
+found that way, not by reading.
 
-- **Un seul conducteur.** Avec `active_mode: true`, c'est le service qui presse
-  `…/take_snapshot/command` — le seul message qu'il écrive jamais sous `ring/#`
-  (`driver.py`). Aucune automatisation HA ne doit presser ce bouton en parallèle.
-- **Intervalle de rafale ≥ 11 s** : ring-mqtt ignore en silence une demande à moins de
-  10 s de la précédente. `Config.load` refuse une valeur plus basse.
-- **Ne jamais activer le flux vidéo en direct de la sonnette**, ni pointer une caméra
-  générique sur le flux RTSP : cela supprime les alertes de mouvement, application Ring
-  comprise. La détection de mouvement reste ON.
-- **Ne jamais versionner ni sauvegarder `ring-state.json`** : accès complet au compte
-  Ring. Ni `config.yaml`, ni `deploy/deploy.env`.
-- **Le serveur de photos n'a aucune authentification.** Aucun des chemins qui y mènent
-  ne doit jamais devenir routable depuis Internet — sinon tout l'historique des
-  visages à la porte devient public. Jamais de Funnel Tailscale dessus.
-- **Le tableau de bord référence les photos par un chemin RELATIF**
-  (`/sonnette-photos/AAAA-MM/x.jpg`) : il ne nomme aucun hôte, et suit donc
-  l'origine par laquelle on est arrivé. **Ajouter une porte d'entrée sans y monter ce
-  préfixe casse les vignettes.** Seule exception : les deux boutons « Photo » du journal,
-  qui ouvrent l'image dans un nouvel onglet et exigent une URL absolue (une par porte,
-  `HA_URL_LAN` et `HA_URL_REMOTE` dans `deploy.env`).
-- **Les photos ne sont dans aucune sauvegarde de HA** (`media` est hors de `config`).
-- **Les journaux JSONL** (`$SERVICE_HOME/data/events-*.jsonl`) sont la seule source
-  durable. Le recorder de HA garde 90 jours pour le journal du tableau ; ce que le
-  recorder ne garde pas, `deploy/inject-journal.py` sait le rejouer depuis les JSONL.
-- **Ne jamais prendre `last_reported` / `last_updated` d'une entité MQTT pour un signe de
-  vie.** HA n'écrit l'état d'une entité MQTT que si une valeur a changé ; un battement au
-  contenu identique ne laisse aucune trace. C'est la cause de fausses alertes
-  « Sonnette muette ».
-- **Chronicle Card** saute les états `unknown`/`unavailable` **et** la transition qui en
-  sort, et n'affiche jamais le tout premier état d'une entité : c'est pourquoi les
-  capteurs du journal sont retenus et sans availability.
-- Sauvegarde horodatée avant toute modification d'un fichier sur l'hôte.
-- Aucune ligne d'attribution dans les messages de commit.
+## Rules never to rediscover
 
-## Retour arrière
+- **One driver only.** With `active_mode: true`, the service is what presses
+  `…/take_snapshot/command`, the only message it ever writes under `ring/#`
+  (`driver.py`). No HA automation may press that button in parallel.
+- **Burst interval >= 11 s**: ring-mqtt silently ignores a request less than 10 s
+  after the previous one. `Config.load` refuses a lower value.
+- **Never enable the doorbell's live video stream**, and never point a generic camera
+  at the RTSP stream: that kills the motion alerts, Ring app included. Motion detection
+  stays ON.
+- **Never version or back up `ring-state.json`**: full access to the Ring account.
+  Nor `config.yaml`, nor `deploy/deploy.env`.
+- **The photo server has no authentication.** None of the paths leading to it may ever
+  become reachable from the Internet, or the whole history of faces at the door becomes
+  public. Never a Tailscale Funnel on it.
+- **The dashboard references photos by a RELATIVE path**
+  (`/sonnette-photos/YYYY-MM/x.jpg`): it names no host, so it follows whichever origin
+  you arrived through. **Adding a front door without mounting that prefix breaks the
+  thumbnails.** The only exception: the two "Photo" buttons of the journal, which open
+  the image in a new tab and need an absolute URL (one per door, `HA_URL_LAN` and
+  `HA_URL_REMOTE` in `deploy.env`).
+- **The photos are in no HA backup** (`media` is outside `config`).
+- **The JSONL logs** (`$SERVICE_HOME/data/events-*.jsonl`) are the only durable source.
+  The HA recorder keeps 90 days for the dashboard journal; what the recorder does not
+  have, `deploy/inject-journal.py` can replay from the JSONL files.
+- **Never take `last_reported` / `last_updated` of an MQTT entity as a sign of life.**
+  HA writes the state of an MQTT entity only when a value changed; a heartbeat with
+  identical content leaves no trace. That was the cause of false "Doorbell silent"
+  alerts.
+- **Chronicle Card** skips the `unknown`/`unavailable` states **and** the transition
+  out of them, and never shows the very first state of an entity: that is why the
+  journal sensors are retained and have no availability.
+- Timestamped backup before any change to a file on the host.
+- No attribution lines in commit messages.
 
-| Niveau | Geste |
+## Rolling back
+
+| Level | Action |
 |---|---|
-| Version du service | remettre l'`image:` précédente dans `docker-compose.yml`, commiter, pousser, `deploy-service.sh` |
-| Pilotage des captures | `active_mode: false` dans `config.yaml`, redémarrer `doorbell-ai`. Sans conducteur, le service ne reçoit plus qu'environ une photo par visite |
-| Côté HA | les sauvegardes `*.bak-<horodatage>` que `deploy-ha.sh` laisse à côté de chaque fichier remplacé |
+| Service version | put the previous tag back in `image:` of `docker-compose.yml` (every published version stays in the registry), commit, push, `deploy-service.sh` |
+| Capture driving | `active_mode: false` in `config.yaml`, restart `doorbell-ai`. Without a driver, the service only gets about one photo per visit |
+| HA side | the `*.bak-<timestamp>` backups that `deploy-ha.sh` leaves next to every replaced file |

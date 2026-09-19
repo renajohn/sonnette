@@ -1,8 +1,8 @@
-tranche      : evenement reel du 2026-09-17, sortie signalee par l utilisateur
-fenetre      : 1789624100 .. 1789624600 (2026-09-17 05:48:20 .. 05:56:40 UTC)
-source       : bande.txt, ANONYMISEE : identifiants Ring -> LOC/DEV, les 7 images
-               remplacees par des images synthetiques (memes doublons), secret RTSP et SSID retires
-format       : %U(epoch ns) %t(topic) %l(longueur) %x(charge en hex)
-sequence     : motion ON, 7 trames snapshot, motion ON (2e mouvement), motion OFF
-republication: 2 trames byte-identiques (sha 346389a3 x2, a11ca419 x2) sur 7
-note         : l ancien systeme n a ecrit que 4 photos sur 7 — voir le registre
+slice        : real event of 2026-09-17, a departure reported by the user
+window       : 1789624100 .. 1789624600 (2026-09-17 05:48:20 .. 05:56:40 UTC)
+source       : bande.txt, ANONYMISED: Ring identifiers -> LOC/DEV, the 7 images
+               replaced by synthetic images (same duplicates), RTSP secret and SSID removed
+format       : %U(epoch ns) %t(topic) %l(length) %x(payload in hex)
+sequence     : motion ON, 7 snapshot frames, motion ON (2nd motion), motion OFF
+republished  : 2 byte-identical frames (sha 346389a3 x2, a11ca419 x2) out of 7
+note         : the old system wrote only 4 photos out of 7, see the registry

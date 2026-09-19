@@ -1,34 +1,35 @@
-# Sonnette — tout ce que Home Assistant fait pour le service doorbell-ai.
+# Doorbell: everything Home Assistant does for the doorbell-ai service.
 #
-# Source de verite : ce fichier, dans le depot sonnette-ring (ha/packages/).
-# Deploye par deploy/deploy-ha.sh vers /config/packages/sonnette.yaml. Ne pas
-# l'editer sur l'hote : le prochain deploiement l'ecraserait.
+# Source of truth: this file, in the sonnette-ring repo (ha/packages/).
+# Deployed by deploy/deploy-ha.sh to /config/packages/sonnette.yaml. Do not
+# edit it on the host: the next deployment would overwrite it.
 #
-# Partage des roles. Le SERVICE (conteneur doorbell-ai) pilote les captures,
-# ecrit et classe les photos, tient la machine a etats, calcule le resume du
-# jour et archive les photos gardees. HOME ASSISTANT ne fait que ce que lui
-# seul peut faire : parler au telephone, et afficher. Aucun script shell,
-# aucun fichier ecrit par HA, aucune copie sous /config/www.
+# Split of roles. The SERVICE (doorbell-ai container) drives the captures,
+# writes and classifies the photos, keeps the state machine, computes the
+# daily summary and archives the kept photos. HOME ASSISTANT only does what
+# it alone can do: talk to the phone, and display. No shell script, no file
+# written by HA, no copy under /config/www.
 #
-# Regles acquises, a ne pas redecouvrir :
-# - Declencheurs MQTT et non declencheurs d'etat sur event.porch : le topic
-#   doorbell/porch/event/state n'est PAS retenu, donc ni redemarrage de HA ni
-#   retour de disponibilite du service ne peuvent rejouer une vieille
-#   sonnerie. Un declencheur d'etat, lui, se declenche au passage
-#   unavailable -> etat restaure.
-# - Garde de fraicheur sur le champ t de la charge : ceinture et bretelles
-#   contre un message qui aurait attendu dans le broker.
-# - /media/local/... fonctionne dans une NOTIFICATION (l'application est
-#   authentifiee) et renvoie 401 dans une CARTE. Les photos du service sont
-#   sous /media/doorbell-ai, d'ou /media/local/doorbell-ai/<photo>.
-# - clickAction (Android) ET url (iOS) : on ne parie pas sur la cle honoree.
-# - tag : un avis remplace le precedent au lieu de s'empiler.
-# - Le chemin de la photo voyage dans l'action de la notification, jamais
-#   dans un helper partage : deux avis en attente gardent chacun LEUR photo.
-# - Seuils et delais dans des input_number, lus a l'execution (delay:/timeout:
-#   ou condition), jamais dans le for: d'un declencheur, rendu au chargement.
-# - Essai de bout en bout sans visiteur : publier sur doorbell/porch/event/state
-#   une charge portant "test": true -- le titre de l'avis porte alors (essai).
+# Lessons learned, not to be rediscovered:
+# - MQTT triggers, not state triggers on event.porch: the topic
+#   doorbell/porch/event/state is NOT retained, so neither an HA restart nor
+#   the service coming back online can replay an old ring. A state trigger,
+#   on the other hand, fires on the transition unavailable -> restored state.
+# - Freshness guard on the t field of the payload: belt and braces against a
+#   message that may have been waiting in the broker.
+# - /media/local/... works in a NOTIFICATION (the app is authenticated) and
+#   returns 401 in a CARD. The service photos live under /media/doorbell-ai,
+#   hence /media/local/doorbell-ai/<photo>.
+# - clickAction (Android) AND url (iOS): we do not bet on which key is honored.
+# - tag: a notification replaces the previous one instead of piling up.
+# - The photo path travels in the notification action, never in a shared
+#   helper: two pending notifications each keep THEIR OWN photo.
+# - Thresholds and delays live in input_number helpers, read at run time
+#   (delay:/timeout: or condition), never in a trigger's for:, which is
+#   rendered at load time.
+# - End-to-end test without a visitor: publish on doorbell/porch/event/state
+#   a payload carrying "test": true -- the notification title then shows
+#   (essai).
 
 input_number:
   sonnette_colis_delai:

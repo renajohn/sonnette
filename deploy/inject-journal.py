@@ -1,10 +1,10 @@
-"""Rejoue les journaux JSONL du service dans l'historique du recorder de HA,
-sous la forme exacte des lignes que publisher.msg_journal produit, avec les
-horodatages d'origine. Geste unique (2026-09-19). Usage :
-  python inject-journal.py <jsonl...>           essai a blanc (base en lecture seule)
-  python inject-journal.py --write <jsonl...>   ecrit
-Tourne dans le conteneur homeassistant (imports HA pour le hash des
-attributs, le JSON et les ULID, comme le recorder lui-meme)."""
+"""Replays the JSONL journals of the service into the HA recorder history,
+in the exact form of the rows that publisher.msg_journal produces, with the
+original timestamps. One-off action (2026-09-19). Usage:
+  python inject-journal.py <jsonl...>           dry run (database read only)
+  python inject-journal.py --write <jsonl...>   writes
+Runs inside the homeassistant container (HA imports for the attributes
+hash, the JSON and the ULIDs, like the recorder itself)."""
 import json, sqlite3, sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -53,8 +53,8 @@ else:
 meta = dict(db.execute("select entity_id, metadata_id from states_meta "
                        "where entity_id like 'sensor.porch_journal_%'"))
 if len(meta) != 4:
-    sys.exit(f"states_meta incomplet : {meta}")
-last_row = {}     # kind -> state_id du dernier insere, pour old_state_id
+    sys.exit(f"states_meta incomplete: {meta}")
+last_row = {}     # kind -> state_id of the last inserted row, for old_state_id
 inserted = skipped = 0
 for t, kind, e in entries:
     eid = f"sensor.porch_journal_{kind}"
@@ -69,7 +69,7 @@ for t, kind, e in entries:
              "icon": KINDS[kind], "friendly_name": f"Porch Journal {kind}"}
     shared = JSON_DUMP(attrs)
     h = StateAttributes.hash_shared_attrs_bytes(shared.encode())
-    print(("ECRIT " if write else "a blanc ")
+    print(("WRITTEN " if write else "dry run ")
           + f"{eid} {datetime.fromtimestamp(t, TZ):%d/%m} {state} photo={e.get('photo')}")
     if not write:
         inserted += 1
@@ -91,5 +91,5 @@ for t, kind, e in entries:
     inserted += 1
 if write:
     db.commit()
-    print("state_id ecrits :", sorted(last_row.values()))
-print(f"{'inserees' if write else 'a inserer'}: {inserted}, deja presentes: {skipped}")
+    print("state_id written:", sorted(last_row.values()))
+print(f"{'inserted' if write else 'to insert'}: {inserted}, already present: {skipped}")

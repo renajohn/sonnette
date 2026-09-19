@@ -1,13 +1,13 @@
 #!/bin/sh
-# Remplace les jetons __CLE__ d'un fichier par les valeurs de deploy/deploy.env
-# et ecrit le resultat sur la sortie standard. Refuse un jeton non resolu :
-# un __CLE__ qui survit finirait tel quel dans Home Assistant ou Portainer.
+# Replaces the __KEY__ tokens of a file with the values of deploy/deploy.env
+# and writes the result to standard output. Refuses an unresolved token: a
+# __KEY__ that survives would end up as is in Home Assistant or Portainer.
 #
-#   deploy/render.sh <fichier>            rend le fichier
-#   . deploy/render.sh --env              charge deploy.env dans le shell courant
+#   deploy/render.sh <file>        renders the file
+#   . deploy/render.sh --env       loads deploy.env into the current shell
 set -eu
 ENV_FILE="$(dirname "$0")/deploy.env"
-[ -f "$ENV_FILE" ] || { echo "deploy/deploy.env absent : copier deploy.env.example et le remplir" >&2; exit 1; }
+[ -f "$ENV_FILE" ] || { echo "deploy/deploy.env missing: copy deploy.env.example and fill it in" >&2; exit 1; }
 if [ "${1:-}" = "--env" ]; then
   set -a; . "$ENV_FILE"; set +a
   return 0 2>/dev/null || exit 0
@@ -23,6 +23,6 @@ text = open(sys.argv[2]).read()
 out = re.sub(r"__([A-Z_]+)__", lambda m: env.get(m.group(1), m.group(0)), text)
 left = sorted(set(re.findall(r"__[A-Z_]+__", out)))
 if left:
-    sys.exit(f"{sys.argv[2]} : jetons non resolus par deploy.env : {', '.join(left)}")
+    sys.exit(f"{sys.argv[2]}: tokens not resolved by deploy.env: {', '.join(left)}")
 sys.stdout.write(out)
 PY

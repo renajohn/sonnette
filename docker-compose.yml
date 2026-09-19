@@ -1,50 +1,53 @@
-# Pile Portainer du service doorbell-ai, deployable telle quelle depuis ce
-# depot Git : Portainer > Stacks > Add stack > Repository, chemin du compose
-# « docker-compose.yml », et ces variables d'environnement dans la pile :
-#   SERVICE_HOME     dossier du service sur l'hote ; $SERVICE_HOME/data porte
-#                    config.yaml (modele : service/config.example.yaml), le
-#                    registre SQLite et les journaux JSONL
-#   PHOTOS_HOST_DIR  dossier des photos sur l'hote, a placer SOUS le dossier
-#                    media de Home Assistant, dans un sous-dossier a lui :
-#                    jamais partage avec un autre programme qui y ecrirait,
-#                    deux ecrivains calculeraient le meme nom de fichier
-#   PHOTOS_HOST      nom d'hote du serveur de photos (route Traefik)
-#   TZ               fuseau horaire (Europe/Zurich par defaut)
-# Portainer construit l'image depuis service/ (Dockerfile) : aucune image a
-# publier. Redeployer = « Pull and redeploy » dans Portainer, ou
-# deploy/deploy-service.sh, qui verifie d'abord qu'aucune photo n'est en
-# train d'arriver.
+# Portainer stack of the doorbell-ai service, deployable as is from this Git
+# repository: Portainer > Stacks > Add stack > Repository, compose path
+# "docker-compose.yml", and these environment variables in the stack:
+#   SERVICE_HOME     service folder on the host; $SERVICE_HOME/data holds
+#                    config.yaml (template: service/config.example.yaml), the
+#                    SQLite registry and the JSONL journals
+#   PHOTOS_HOST_DIR  photos folder on the host, to be placed UNDER the Home
+#                    Assistant media folder, in a subfolder of its own:
+#                    never shared with another program that would write
+#                    there, two writers would compute the same file name
+#   PHOTOS_HOST      host name of the photo server (Traefik route)
+#   TZ               time zone (Europe/Zurich by default)
+# The image is built and published by the GitHub action
+# (.github/workflows/image.yml) on every push to main that touches service/.
+# Portainer's automatic update pulls before it deploys, so a "build:" here
+# would not be enough: its update job fails on an image that exists only
+# locally. Redeploy = Portainer's poll (5 min), "Pull and redeploy" in
+# Portainer, or deploy/deploy-service.sh, which first checks that no photo
+# is arriving right now.
 networks:
   web:
     external: true
 
 services:
   doorbell-ai:
-    build: ./service
-    # La version DOIT etre celle de service/pyproject.toml : deploy-service.sh
-    # refuse sinon. Changer les deux ensemble.
-    image: doorbell-ai:0.3.1
+    # The tag MUST be the version in service/pyproject.toml: deploy-service.sh
+    # refuses otherwise. Change both together, in the same commit: the action
+    # publishes the tag, Portainer pulls it.
+    image: ghcr.io/renajohn/sonnette:0.3.1
     container_name: doorbell-ai
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Europe/Zurich}
     volumes:
-      - ${SERVICE_HOME:?dossier du service sur l hote}/data:/data
-      - ${PHOTOS_HOST_DIR:?dossier des photos sur l hote}:/photos
+      - ${SERVICE_HOME:?service folder on the host}/data:/data
+      - ${PHOTOS_HOST_DIR:?photos folder on the host}:/photos
     logging:
       options: { max-size: "10m", max-file: "3" }
-    # Sur le reseau « web », route par Traefik comme tout service HTTP de
-    # l'hote. Aucun port publie : on y accede par Traefik seulement.
+    # On the "web" network, routed by Traefik like every HTTP service of
+    # the host. No published port: it is reached through Traefik only.
     networks:
       - web
     labels:
       com.centurylinklabs.watchtower.enable: "true"
       traefik.enable: "true"
-      traefik.http.routers.sonnette.rule: "Host(`${PHOTOS_HOST:?nom d hote du serveur de photos}`)"
+      traefik.http.routers.sonnette.rule: "Host(`${PHOTOS_HOST:?host name of the photo server}`)"
       traefik.http.routers.sonnette.entrypoints: "websecure"
       traefik.http.routers.sonnette.tls: "true"
-      # Le port est aussi dans le Dockerfile (EXPOSE) et dans serve_port de
-      # config.yaml : changer les trois ensemble.
+      # The port is also in the Dockerfile (EXPOSE) and in serve_port of
+      # config.yaml: change all three together.
       traefik.http.services.sonnette.loadbalancer.server.port: "8099"
       homepage.name: "Sonnette"
       homepage.description: "Photos de la sonnette d'entrée, classées à l'arrivée"

@@ -1,0 +1,56 @@
+# Builds the service image and publishes it to the GitHub container registry
+# on every push to main that touches the service. The Portainer stack
+# (docker-compose.yml) pulls that image: Portainer's automatic update pulls
+# before it deploys, so the image has to exist in a registry, a locally
+# built one is not enough (its update job fails on "pull access denied").
+#
+# Tags: the version from service/pyproject.toml, and "latest". The compose
+# file pins the version, so a version bump is what deploys a change (and
+# rolling back is putting the previous tag back).
+#
+# Tests run first: the image is only published when they pass.
+name: image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "service/**"
+      - ".github/workflows/image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install paho-mqtt==2.1.0 "PyYAML>=6" "pytest>=8"
+      - run: python -m pytest -q
+        working-directory: service
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' service/pyproject.toml)" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: service
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/sonnette:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/sonnette:latest

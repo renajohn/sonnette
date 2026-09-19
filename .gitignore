@@ -1,10 +1,10 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
-# Valeurs propres a une installation : noms d'hote, chemins, comptes.
+# Values specific to one installation: host names, paths, accounts.
 deploy/deploy.env
-# Notes de conception et copie de l'ancien systeme : pas du code.
+# Design notes and a copy of the old system: not code.
 docs/
-# Traces d'outils et sauvegardes.
+# Tool traces and backups.
 .playwright-mcp/
 *.bak*

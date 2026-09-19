@@ -1,78 +1,78 @@
-# Tableau de bord « Sonnette » — repond en un coup d'oeil a trois questions,
-# dans les mots de l'utilisateur :
-#   1. Est-ce que ma livraison est arrivee aujourd'hui ?
-#   2. Qui a sonne durant la journee ?
-#   3. Est-ce qu'il y a eu des mouvements suspects dans la nuit ?
+# "Sonnette" (doorbell) dashboard: answers three questions at a glance,
+# in the user's own words:
+#   1. Did my delivery arrive today?
+#   2. Who rang during the day?
+#   3. Were there suspicious movements during the night?
 #
-# Source de verite : ha/dashboards/sonnette.yaml dans le depot, deploye par
-# deploy/deploy-ha.sh, qui remplace les jetons (NOM entre doubles soulignes)
-# par les valeurs de deploy/deploy.env.
-# Ne pas l'editer sur l'hote.
+# Source of truth: ha/dashboards/sonnette.yaml in the repo, deployed by
+# deploy/deploy-ha.sh, which replaces the tokens (NAME between double
+# underscores) with the values from deploy/deploy.env.
+# Do not edit it on the host.
 #
-# D'ou viennent les donnees : UNE entite, sensor.porch_summary, publiee par le
-# service doorbell-ai (doorbell/summary.py) a partir de ses journaux JSONL --
-# la seule source durable. Plus les entites temps reel du service (visite,
-# personne, animal, derniere photo). Exception : le journal lit l'HISTORIQUE
-# des quatre sensor.porch_journal_* dans le recorder de HA, regle a 90 jours
-# pour cela (configuration.yaml de HA, recorder: purge_keep_days).
+# Where the data comes from: ONE entity, sensor.porch_summary, published by
+# the doorbell-ai service (doorbell/summary.py) from its JSONL logs, the
+# only durable source. Plus the real-time entities of the service (visit,
+# person, animal, latest photo). Exception: the journal reads the HISTORY
+# of the four sensor.porch_journal_* in the HA recorder, set to 90 days
+# for this purpose (HA configuration.yaml, recorder: purge_keep_days).
 #
-# Ce que le tableau ne doit JAMAIS pretendre (spec §5) :
-# - nommer quelqu'un : le service ne connait ni identite, ni nombre, ni sens
-#   de passage. « Qui a sonne » = des heures et des photos ;
-# - « colis livre » : le signal veut dire « quelqu'un PORTE un carton ». Un
-#   colis pose au sol est dans l'angle mort de la camera (teste).
+# What the dashboard must NEVER claim (spec section 5):
+# - naming someone: the service knows no identity, no count, no direction
+#   of travel. "Who rang" = times and photos;
+# - "parcel delivered": the signal means "someone is CARRYING a box". A
+#   parcel left on the ground is in the camera's blind spot (tested).
 #
-# Regles durement acquises, a ne pas redecouvrir :
-# - Photos par le chemin RELATIF /sonnette-photos/<champ photo de l'evenement>.
-#   Aucun nom d'hote : l'URL suit l'origine par laquelle on est arrive, donc
-#   les vignettes chargent aussi bien a la maison que depuis l'exterieur.
-#   Chaque porte d'entree de HA (Traefik sur le reseau local, « tailscale
-#   serve » depuis l'exterieur) monte ce prefixe vers doorbell-ai:8099 et le
-#   retire avant de transmettre. AJOUTER UNE PORTE D'ENTREE SANS Y MONTER CE
-#   PREFIXE CASSE LES VIGNETTES.
-#   Pas de copie sous /config/www, pas d'octet en sauvegarde : les photos
-#   restent dans /media. /media/local/… renvoie 401 dans une carte ;
-#   /api/image_proxy exige un jeton signe, donc l'entite image ne s'affiche
-#   que par une carte picture-entity ; un lien symbolique de /config/www vers
-#   /media ne marche pas (aiohttp, follow_symlinks=False, jamais active).
-#   Ce serveur n'a AUCUNE authentification : ne jamais l'exposer en Funnel,
-#   ni sur une adresse routable depuis Internet.
-# - Noms de fichiers uniques et jamais reecrits : plus besoin du ?v= anti-cache
-#   de l'ancien tableau. Le remettre si des noms fixes reapparaissent.
-# - HTML (<a target="_blank"><img>) et non markdown pour les images : un lien
-#   relatif markdown est intercepte par le routeur de HA.
-# - Une grille d'images = <table> HTML ; des images markdown se placent
-#   chacune sur sa ligne en pleine largeur.
-# - Scalaires litteraux « | » pour le contenu multi-ligne : « >- » replie les
-#   lignes et casse le markdown. Lignes de gabarit collees a gauche : quatre
-#   espaces en tete en font un bloc de code.
-# - Une seule carte tierce, Chronicle Card (HACS, magasin par defaut), pour
-#   le journal : demandee le 2026-09-19 (« tous les evenements avec toutes
-#   les images »). Tout le reste est natif. <ha-alert> et <ha-icon> sont
-#   les seuls elements HA autorises en markdown.
-# - Les conditions de visibilite numeric_state acceptent « attribute ».
+# Hard-won rules, not to be rediscovered:
+# - Photos via the RELATIVE path /sonnette-photos/<photo field of the event>.
+#   No host name: the URL follows the origin we came in through, so the
+#   thumbnails load just as well at home as from outside.
+#   Each HA entry point (Traefik on the local network, "tailscale serve"
+#   from outside) mounts this prefix to doorbell-ai:8099 and strips it
+#   before forwarding. ADDING AN ENTRY POINT WITHOUT MOUNTING THIS PREFIX
+#   ON IT BREAKS THE THUMBNAILS.
+#   No copy under /config/www, no bytes in the backup: the photos stay in
+#   /media. /media/local/... returns 401 inside a card; /api/image_proxy
+#   requires a signed token, so the image entity only shows through a
+#   picture-entity card; a symbolic link from /config/www to /media does
+#   not work (aiohttp, follow_symlinks=False, never enabled).
+#   This server has NO authentication: never expose it through Funnel,
+#   nor on an address routable from the Internet.
+# - File names are unique and never rewritten: no more need for the ?v=
+#   cache-buster of the old dashboard. Put it back if fixed names reappear.
+# - HTML (<a target="_blank"><img>) and not markdown for images: a relative
+#   markdown link is intercepted by the HA router.
+# - An image grid = HTML <table>; markdown images each land on their own
+#   line at full width.
+# - Literal scalars "|" for multi-line content: ">-" folds the lines and
+#   breaks the markdown. Template lines flush left: four leading spaces
+#   turn them into a code block.
+# - A single third-party card, Chronicle Card (HACS, default store), for
+#   the journal: requested on 2026-09-19 ("all events with all the
+#   images"). Everything else is native. <ha-alert> and <ha-icon> are the
+#   only HA elements allowed in markdown.
+# - The numeric_state visibility conditions accept "attribute".
 #
-# Mise en page (revue le 2026-09-17, « beaucoup de vide, questions trop au
-# premier niveau ») :
-# - Les REPONSES sont au premier niveau, pas les questions. Un titre dit le
-#   sujet en un mot (Aujourd'hui, Journal) ; la phrase-reponse est en gras dans
-#   la carte. Jamais de titre en forme de question.
-# - Trois colonnes qui ont TOUJOURS du contenu : la photo, les reponses, le
-#   journal. Une section qui peut etre vide (pas de colis, nuit calme) ne doit
-#   jamais etre une colonne a elle seule : c'est ce qui creusait des trous.
-#   Un sujet sans rien a montrer tient en UNE ligne, sans vignette.
-# - Pas de bandeau pleine largeur pour trois mots : sur 3 colonnes, une alerte
-#   courte est une bande vide.
-# - Un seul ecran, et on y change de jour (pas d'onglet « jour par jour »,
-#   essaye puis retire le 2026-09-18 : « pourquoi un nouveau tab ? »). Les
-#   reponses, le journal et les badges lisent sensor.porch_day, le resume
-#   calcule pour input_datetime.sonnette_jour (le service ecoute
-#   doorbell/porch/day/set). La photo en direct, les etats et le graphique
-#   24 h restent ceux du moment. A minuit, le jour affiche revient a
-#   aujourd'hui (automatisation sonnette_jour_minuit).
-# - Sante et reglages sont dans un second onglet : on les consulte quand
-#   quelque chose cloche, pas chaque matin. Un bandeau d'erreur remonte tout
-#   de meme sur la vue principale si le service ou le modele tombe.
+# Layout (reviewed on 2026-09-17, "a lot of empty space, questions too much
+# at the top level"):
+# - The ANSWERS are at the top level, not the questions. A heading says the
+#   topic in one word (Aujourd'hui, Journal); the answer sentence is in bold
+#   in the card. Never a heading in the form of a question.
+# - Three columns that ALWAYS have content: the photo, the answers, the
+#   journal. A section that can be empty (no parcel, quiet night) must
+#   never be a column on its own: that is what was digging holes.
+#   A topic with nothing to show fits in ONE line, without a thumbnail.
+# - No full-width banner for three words: over 3 columns, a short alert
+#   is an empty strip.
+# - A single screen, and the day is changed there (no "day by day" tab,
+#   tried then removed on 2026-09-18: "why a new tab?"). The answers, the
+#   journal and the badges read sensor.porch_day, the summary computed for
+#   input_datetime.sonnette_jour (the service listens on
+#   doorbell/porch/day/set). The live photo, the states and the 24 h
+#   graph stay those of the present moment. At midnight, the displayed
+#   day goes back to today (automation sonnette_jour_minuit).
+# - Health and settings are in a second tab: they are checked when
+#   something is wrong, not every morning. An error banner still shows up
+#   on the main view if the service or the model goes down.
 title: Sonnette
 views:
 - title: Porte d'entrée
@@ -342,18 +342,18 @@ views:
       heading: Journal
       heading_style: title
       icon: mdi:timeline-clock-outline
-    # Chronicle Card (HACS) : une ligne par photo retenue, lue dans
-    # l'HISTORIQUE de quatre capteurs du service (sensor.porch_journal_*),
-    # dont l'etat est l'heure a la seconde et l'attribut photo le chemin
-    # relatif. Le titre d'une ligne = nom de l'entite + etat : « Personne
-    # 07:46:15 ». La carte saute les etats unknown/unavailable ET la
-    # transition qui en sort : c'est pourquoi ces capteurs sont retenus et
-    # sans availability (publisher.py). Le sélecteur de jour ci-dessus ne
-    # pilote pas cette carte : elle montre days_back jours, groupés par
-    # date, et le recorder les garde 90 jours (configuration.yaml).
-    # Les boutons « Photo » ouvrent l'image complete dans un nouvel onglet :
-    # une URL ABSOLUE est obligatoire ici (un chemin relatif serait pris
-    # pour une page de HA), d'ou un bouton par porte d'entree.
+    # Chronicle Card (HACS): one line per kept photo, read from the
+    # HISTORY of four sensors of the service (sensor.porch_journal_*),
+    # whose state is the time to the second and whose photo attribute is
+    # the relative path. The title of a line = entity name + state:
+    # "Personne 07:46:15". The card skips unknown/unavailable states AND
+    # the transition out of them: that is why these sensors are retained
+    # and have no availability (publisher.py). The day selector above
+    # does not drive this card: it shows days_back days, grouped by date,
+    # and the recorder keeps them 90 days (configuration.yaml).
+    # The "Photo" buttons open the full image in a new tab: an ABSOLUTE
+    # URL is mandatory here (a relative path would be taken for a HA
+    # page), hence one button per entry point.
     - type: custom:chronicle-card
       show_header: false
       layout: vertical

@@ -1,16 +1,16 @@
 #!/bin/sh
-# Deploie le cote Home Assistant : le package et le tableau de bord, apres
-# remplacement des jetons __CLE__ par deploy/deploy.env (deploy/render.sh).
+# Deploys the Home Assistant side: the package and the dashboard, after
+# replacing the __KEY__ tokens with deploy/deploy.env (deploy/render.sh).
 #
-# Sauvegarde horodatee de tout fichier remplace, puis check_config. Ne recharge
-# et ne redemarre RIEN : apres un exit 0, recharger « Toute la configuration
-# YAML » dans HA (Outils de developpement > YAML), ou :
+# Timestamped backup of every replaced file, then check_config. Reloads and
+# restarts NOTHING: after an exit 0, reload "All YAML configuration" in HA
+# (Developer tools > YAML), or:
 #   curl -X POST -H "Authorization: Bearer $HA" $HA_API/api/services/homeassistant/reload_all
 #
-# Prerequis, une seule fois, dans configuration.yaml sous homeassistant: :
+# Prerequisite, once, in configuration.yaml under homeassistant: :
 #     packages: !include_dir_named packages
-# Le dossier de configuration appartient souvent a root : on y ecrit au
-# travers du conteneur homeassistant.
+# The configuration folder often belongs to root: we write into it through
+# the homeassistant container.
 set -eu
 cd "$(dirname "$0")/.."
 . deploy/render.sh --env
@@ -24,7 +24,7 @@ scp -q "$TMP/package.yaml" "$HOST:/tmp/sonnette-package.yaml"
 scp -q "$TMP/dashboard.yaml" "$HOST:/tmp/sonnette-dashboard.yaml"
 ssh "$HOST" "set -eu
   grep -q 'packages: !include_dir_named packages' '$HA_CONFIG/configuration.yaml' || {
-    echo 'configuration.yaml ne charge pas packages/ (voir l en-tete de ce script)' >&2
+    echo 'configuration.yaml does not load packages/ (see the header of this script)' >&2
     exit 1; }
   docker exec homeassistant sh -c '
     set -eu
@@ -37,4 +37,4 @@ ssh "$HOST" "set -eu
   rm -f /tmp/sonnette-package.yaml /tmp/sonnette-dashboard.yaml
   echo '== check_config'
   docker exec homeassistant python -m homeassistant --script check_config -c /config"
-echo "OK. Recharger « Toute la configuration YAML » dans Home Assistant."
+echo "OK. Reload All YAML configuration in Home Assistant."
