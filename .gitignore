@@ -8,3 +8,4 @@ docs/
 # Tool traces and backups.
 .playwright-mcp/
 *.bak*
+.DS_Store

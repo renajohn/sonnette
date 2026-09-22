@@ -28,13 +28,28 @@ to Ring, and it stays as it is.
 | `docker-compose.yml` | The Portainer stack for the service, deployable as is from this repository (see *Deploy*). Pulls the image that the GitHub action publishes. |
 | `.github/workflows/image.yml` | On every push to `main` that touches `service/`: runs the tests, then builds the image and publishes it to `ghcr.io/<owner>/sonnette:<version>` and `:latest`. |
 | `service/` | Container `doorbell-ai`. Presses the snapshot button after a motion or a ring (`driver.py`), writes every photo, classifies it with a local model (OpenAI-compatible API, image plus question), runs the visit state machine, publishes entities and events over MQTT, computes the day summary (`summary.py`), keeps the chosen photos (`archive.py`), purges after 180 days, serves the photos over HTTP (`webserve.py`). |
-| `ha/packages/sonnette.yaml` | What only HA can do: phone notifications (ring, parcel without a ring, "Kept" confirmation, two supervisions) and the settings (`input_number`, displayed day). No shell script, no file written by HA. |
-| `ha/dashboards/sonnette.yaml` | The dashboard. Answers three questions: did my delivery arrive, who rang today, was there movement last night. The journal is a third-party card, Chronicle Card (HACS), reading the history of the `sensor.porch_journal_*` entities. |
-| `deploy/` | `deploy-service.sh` (redeploy through Portainer), `deploy-ha.sh` (package and dashboard), `render.sh` (tokens), `deploy.env.example` (template of the values specific to one installation), and two one-off scripts kept for the record: `retire-legacy.py`, `inject-journal.py`. |
+| `deploy/` | `deploy-service.sh` (redeploy through Portainer), `render.sh` (tokens), `deploy.env.example` (template of the values specific to one installation), and two one-off scripts kept for the record: `retire-legacy.py`, `inject-journal.py`. |
 
 Everything specific to one installation (host names, paths, accounts, notification
 targets) lives in `deploy/deploy.env`, ignored by git, and in the Portainer stack
 variables. The repository contains none of it.
+
+### The Home Assistant side is no longer here
+
+`ha/packages/sonnette.yaml`, `ha/dashboards/sonnette.yaml` and `deploy/deploy-ha.sh`
+left on 2026-09-22 for a private `homeassistant` repository that holds the whole
+configuration of one installation. They were kept here as templates with
+`__NOTIFY_PHONE__`-style tokens precisely because this repository is public; a private
+one carries the resolved values and needs no rendering step, so no token can survive it
+and reach Home Assistant as is.
+
+They had already drifted: this repository carried an English-commented version,
+committed on 2026-09-19 and never deployed, while production ran the French one — 237
+diverging lines. Two homes for one file is how that happens. What stays here is the
+service: code, image, stack.
+
+Anyone rebuilding the Home Assistant side from this repository will find those two
+files in the history, before that date.
 
 The texts shown inside Home Assistant (dashboard labels, notifications) are in French
 on purpose: that is the language of the house.
@@ -107,13 +122,10 @@ window: push a version change when nobody is expected at the door.
 
 ```sh
 deploy/deploy-service.sh     # without waiting for the poll: pull and redeploy, after checking for silence
-deploy/deploy-ha.sh          # renders the tokens, copies package + dashboard, timestamped backups, check_config
 ```
 
 `deploy-service.sh` requires a clean, pushed repository (Portainer deploys the remote)
 and refuses to restart the container if a photo is less than 3 minutes old.
-`deploy-ha.sh` reloads nothing; after an exit 0, reload "All YAML configuration" in HA.
-A recorder change needs an HA restart.
 
 Changing version: `version` in `service/pyproject.toml` **and** `image:` in
 `docker-compose.yml` (the script checks that they match).
@@ -179,4 +191,4 @@ found that way, not by reading.
 |---|---|
 | Service version | put the previous tag back in `image:` of `docker-compose.yml` (every published version stays in the registry), commit, push, `deploy-service.sh` |
 | Capture driving | `active_mode: false` in `config.yaml`, restart `doorbell-ai`. Without a driver, the service only gets about one photo per visit |
-| HA side | the `*.bak-<timestamp>` backups that `deploy-ha.sh` leaves next to every replaced file |
+| HA side | `git revert` in the homeassistant repository, then its `deploy/deploy.sh` |
